@@ -17,6 +17,10 @@
     "url": "https://github.com/qilaidev/social-copilot.git",
     "directory": "packages/mobile"
   },
+  "bugs": {
+    "url": "https://github.com/qilaidev/social-copilot/issues"
+  },
+  "author": "qilaidev",
   "license": "MIT",
   "main": "index.js",
   "scripts": {

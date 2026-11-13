@@ -19,6 +19,10 @@
     "url": "https://github.com/qilaidev/social-copilot.git",
     "directory": "packages/browser-extension"
   },
+  "bugs": {
+    "url": "https://github.com/qilaidev/social-copilot/issues"
+  },
+  "author": "qilaidev",
   "license": "MIT",
   "scripts": {
     "dev": "vite build --watch",

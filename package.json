@@ -24,6 +24,10 @@
     "type": "git",
     "url": "https://github.com/qilaidev/social-copilot.git"
   },
+  "bugs": {
+    "url": "https://github.com/qilaidev/social-copilot/issues"
+  },
+  "author": "qilaidev",
   "license": "MIT",
   "scripts": {
     "dev": "pnpm -r --filter \"./packages/*\" --if-present dev",

@@ -18,6 +18,10 @@
     "url": "https://github.com/qilaidev/social-copilot.git",
     "directory": "packages/core"
   },
+  "bugs": {
+    "url": "https://github.com/qilaidev/social-copilot/issues"
+  },
+  "author": "qilaidev",
   "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
