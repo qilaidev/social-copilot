@@ -1,0 +1,42 @@
+{
+  "name": "@social-copilot/browser-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Manifest V3 browser extension for Social Copilot AI reply suggestions on Telegram, WhatsApp, and Slack Web.",
+  "keywords": [
+    "browser-extension",
+    "chrome-extension",
+    "manifest-v3",
+    "ai-reply-assistant",
+    "telegram",
+    "whatsapp",
+    "slack",
+    "typescript"
+  ],
+  "homepage": "https://github.com/qilaidev/social-copilot/tree/main/social-copilot/packages/browser-extension#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qilaidev/social-copilot.git",
+    "directory": "social-copilot/packages/browser-extension"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@social-copilot/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.38",
+    "@vitest/coverage-v8": "^4.1.2",
+    "fast-check": "^4.6.0",
+    "jsdom": "^29.0.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.13",
+    "vitest": "^4.1.2"
+  }
+}

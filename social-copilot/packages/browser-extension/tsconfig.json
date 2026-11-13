@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["chrome", "node", "vitest/globals"],
+    "paths": {
+      "@social-copilot/core": ["../core/src"],
+      "@social-copilot/core/*": ["../core/src/*"]
+    },
+    "outDir": "./dist",
+    "rootDir": "..",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*"]
+}

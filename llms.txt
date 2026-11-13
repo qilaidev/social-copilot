@@ -1,0 +1,48 @@
+# Social Copilot
+
+> Social Copilot is a local-first, bring-your-own-key (BYOK) AI chat reply assistant browser extension (Manifest V3) for Telegram Web, WhatsApp Web, and Slack Web. It reads visible conversation context, applies outbound PII redaction, and generates 2–3 style-aware draft replies for human review—never auto-sending messages by default.
+
+## Canonical Links
+
+- Repository: https://github.com/qilaidev/social-copilot
+- English README: https://github.com/qilaidev/social-copilot/blob/main/README.en.md
+- Chinese README: https://github.com/qilaidev/social-copilot/blob/main/README.md
+- Privacy Policy Site: https://qilaidev.github.io/social-copilot/
+- License: MIT (https://github.com/qilaidev/social-copilot/blob/main/LICENSE)
+
+## Monorepo Package Map
+
+Workspace root: `social-copilot/` (pnpm workspace, TypeScript, Node.js >= 18, pnpm >= 10).
+
+- `social-copilot/packages/core/` (`@social-copilot/core`): Core SDK containing LLM provider abstractions, prompt builders, Prompt Hook extension points, outbound PII redaction, sender anonymization, IndexedDB storage, contact profiles, preference tracking, and thought-card analysis.
+- `social-copilot/packages/browser-extension/` (`@social-copilot/browser-extension`): Chrome/Edge Manifest V3 extension containing platform DOM adapters, content scripts, background service worker, popup configuration UI, and release packaging scripts.
+- `social-copilot/packages/mobile/` (`@social-copilot/mobile`): Expo / React Native development preview client (not intended to ship production API keys).
+
+## Extension Architecture & Interfaces
+
+### Platform Adapters (`packages/browser-extension/src/adapters/`)
+- **Supported Surfaces**: Telegram Web (`web.telegram.org`), WhatsApp Web (`web.whatsapp.com`), Slack Web (`app.slack.com`).
+- **Responsibilities**: Extract visible message history within configurable message-count and character budgets, identify active chat/contact metadata, and fill selected draft replies into the platform's input composer without auto-submitting.
+- **Remote Selectors**: Optional DOM selector hotfixes via `raw.githubusercontent.com` (`selectors.json`).
+
+### LLM Providers (`packages/core/src/llm/`)
+- **Supported Providers**: DeepSeek, OpenAI, Claude (Anthropic), NVIDIA, and built-in SiliconFlow / DeepSeek-V3 path.
+- **Resilience**: Primary and fallback provider configuration with automatic failover and recovery diagnostics.
+- **Reply Styles**: `humorous`, `caring`, `rational`, `casual`, `formal`, plus thought-card intent directions (`empathy`, `solution`, `humor`, `neutral`).
+
+### Privacy & Storage Model
+- **Local-First Persistence**: Preferences, contact profiles, and memory summaries are stored locally in `IndexedDB` and `chrome.storage`.
+- **Outbound Sanitization**: PII redaction and sender anonymization run before any prompt payload leaves the browser.
+- **Human-in-the-Loop**: Drafts are inserted or copied for manual user confirmation; no hosted Social Copilot backend exists in the default flow.
+
+## Documentation Index
+
+- [Workspace Usage & Build](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/README.md)
+- [Engineering Docs Index](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/README.md)
+- [Architecture](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/ARCHITECTURE.md)
+- [Adapter Development](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/ADAPTER_DEVELOPMENT.md)
+- [LLM Integration](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/LLM_INTEGRATION.md)
+- [Configuration](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/CONFIGURATION.md)
+- [Privacy Policy Template](https://github.com/qilaidev/social-copilot/blob/main/social-copilot/docs/PRIVACY.md)
+- [Contributing](https://github.com/qilaidev/social-copilot/blob/main/CONTRIBUTING.md)
+- [Security Policy](https://github.com/qilaidev/social-copilot/blob/main/SECURITY.md)

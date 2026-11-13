@@ -1,0 +1,51 @@
+// @vitest-environment jsdom
+import { describe, test, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+describe('Popup Accessibility', () => {
+  const htmlPath = resolve(__dirname, 'index.html');
+  const htmlContent = readFileSync(htmlPath, 'utf-8');
+
+  beforeEach(() => {
+    document.documentElement.innerHTML = htmlContent;
+  });
+
+  test('style-options should be focusable via tabindex', () => {
+    const styleOptions = document.querySelectorAll('.style-option');
+    expect(styleOptions.length).toBeGreaterThan(0);
+    styleOptions.forEach((option) => {
+      expect(option.getAttribute('tabindex')).toBe('0');
+    });
+  });
+
+  test('all buttons should have cursor: pointer', () => {
+    // We check the styles in the HTML content since JSDOM doesn't fully process CSS
+    expect(htmlContent).toMatch(/\.tab\s*{[^}]*cursor:\s*pointer/);
+    expect(htmlContent).toMatch(/button\.primary\s*{[^}]*cursor:\s*pointer/);
+    expect(htmlContent).toMatch(/button\.secondary\s*{[^}]*cursor:\s*pointer/);
+    expect(htmlContent).toMatch(/\.action-btn\s*{[^}]*cursor:\s*pointer/);
+  });
+
+  test('contact-item should NOT have cursor: pointer', () => {
+    // Check that .contact-item style block does not contain cursor: pointer
+    const contactItemStyleMatch = htmlContent.match(/\.contact-item\s*{([^}]*)}/);
+    if (contactItemStyleMatch) {
+      expect(contactItemStyleMatch[1]).not.toContain('cursor: pointer');
+    }
+  });
+
+  test('focus-visible styles should use the specified outline', () => {
+    expect(htmlContent).toContain('outline: 2px solid var(--sc-primary)');
+    expect(htmlContent).toContain('outline-offset: 2px');
+  });
+
+  test('form controls should have explicit focus treatment', () => {
+    expect(htmlContent).toMatch(/\.form-group\s+input:focus,[^}]*border-color:\s*var\(--sc-primary\)/);
+    expect(htmlContent).toMatch(/\.form-group\s+input:focus,[^}]*box-shadow:\s*0 0 0 3px rgba\(91, 94, 246, 0\.1\)/);
+  });
+
+  test('style-option should have focus-visible outline', () => {
+    expect(htmlContent).toMatch(/\.style-option:focus-visible\s*{[^}]*outline:\s*2px\s+solid\s+var\(--sc-primary\)/);
+  });
+});

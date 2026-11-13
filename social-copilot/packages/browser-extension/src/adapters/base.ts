@@ -1,0 +1,283 @@
+import type { Message, ContactKey } from '@social-copilot/core';
+import { contactKeyToString } from '@social-copilot/core';
+import { debugWarn } from '../utils/debug';
+
+export interface AdapterRuntimeInfo {
+  /** Adapter layout/version variant selected at runtime */
+  variant?: string;
+  /** Which selectors actually matched on the current page */
+  selectorHints?: Partial<Record<'chatContainer' | 'message' | 'inputBox', string>>;
+}
+
+/**
+ * 平台适配器接口
+ * 每个聊天平台实现一个适配器
+ */
+export interface PlatformAdapter {
+  /** 平台标识 */
+  readonly platform: ContactKey['app'];
+  
+  /** 检查当前页面是否匹配此适配器 */
+  isMatch(): boolean;
+  
+  /** 提取当前会话的联系人信息 */
+  extractContactKey(): ContactKey | null;
+  
+  /** 提取最近的消息列表 */
+  extractMessages(limit: number): Message[];
+  
+  /** 获取输入框元素 */
+  getInputElement(): HTMLElement | null;
+  
+  /** 填充文本到输入框 */
+  fillInput(text: string): boolean;
+  
+  /** 监听新消息 */
+  onNewMessage(callback: (message: Message) => void): () => void;
+
+  /** Optional runtime information for diagnostics */
+  getRuntimeInfo?(): AdapterRuntimeInfo;
+}
+
+/**
+ * 分割选择器字符串为数组
+ * @param selectors - 逗号分隔的选择器字符串
+ */
+export function splitSelectors(selectors: string): string[] {
+  return selectors
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 按优先级查询第一个匹配的元素
+ * @param selectors - 选择器数组或逗号分隔字符串
+ * @param root - 查询根节点
+ * @returns 匹配的元素和选择器，或 null
+ */
+export function queryFirst<T extends Element = Element>(
+  selectors: string | string[],
+  root: ParentNode = document
+): { element: T; selector: string } | null {
+  const list = Array.isArray(selectors) ? selectors : splitSelectors(selectors);
+  for (const selector of list) {
+    try {
+      const el = root.querySelector(selector);
+      if (el) return { element: el as T, selector };
+    } catch (err) {
+      // Invalid CSS selectors can throw a DOMException (name: "SyntaxError").
+      // Skip only that class of errors so we don't hide unrelated issues.
+      const isInvalidSelector =
+        err instanceof DOMException ? err.name === 'SyntaxError' : err instanceof Error ? err.name === 'SyntaxError' : false;
+
+      if (!isInvalidSelector) throw err;
+
+      const isDev =
+        (typeof process !== 'undefined' &&
+          typeof process.env !== 'undefined' &&
+          process.env.NODE_ENV === 'development') ||
+        (typeof process === 'undefined' && typeof location !== 'undefined' && location.hostname === 'localhost');
+
+      if (isDev) {
+        debugWarn('[queryFirst] invalid selector skipped:', selector, err);
+      }
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * 生成一个可预测的短 hash（32-bit）用于构造稳定 ID
+ */
+function hashString(input: string): string {
+  // FNV-1a 32-bit
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  // unsigned -> base36
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * 构建稳定的消息 ID
+ * 优先使用平台提供的 ID，否则基于内容生成哈希
+ */
+export function buildMessageId(args: {
+  preferredId?: string | null;
+  contactKey: ContactKey;
+  direction: Message['direction'];
+  senderName: string;
+  text: string;
+  timeText?: string;
+}): string {
+  // Message IDs must be stable and globally unique within the extension DB.
+  // We namespace by contactKeyStr to avoid collisions when a platform only provides per-chat IDs.
+  const contactKeyStr = contactKeyToString(args.contactKey);
+  const preferred = typeof args.preferredId === 'string' ? args.preferredId.trim() : '';
+  if (preferred) {
+    return `${contactKeyStr}::${preferred}`;
+  }
+
+  const raw = [
+    args.direction,
+    args.senderName,
+    (args.timeText ?? '').trim(),
+    args.text,
+  ].join('|');
+  const stable = hashString(`${contactKeyStr}|${raw}`);
+  return `${contactKeyStr}::f_${stable}`;
+}
+
+/**
+ * 解析时间文本为时间戳
+ * 支持多种格式：HH:MM AM/PM、昨天、日期等
+ */
+export function parseTimestampFromText(timeText: string, now: Date = new Date()): number {
+  const text = (timeText ?? '').trim();
+  if (!text) return Date.now();
+
+  const base = new Date(now.getTime());
+
+  if (/yesterday/i.test(text) || text.includes('昨天')) {
+    base.setDate(base.getDate() - 1);
+  }
+
+  // Date patterns
+  const ymd = text.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (ymd) {
+    const year = parseInt(ymd[1], 10);
+    const month = parseInt(ymd[2], 10) - 1;
+    const day = parseInt(ymd[3], 10);
+    base.setFullYear(year, month, day);
+  } else {
+    const mdy = text.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+    if (mdy) {
+      const month = parseInt(mdy[1], 10) - 1;
+      const day = parseInt(mdy[2], 10);
+      const year = parseInt(mdy[3], 10);
+      base.setFullYear(year, month, day);
+    } else {
+      const mdZh = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+      const md = mdZh || text.match(/(\d{1,2})[./-](\d{1,2})/);
+      if (md) {
+        const month = parseInt(md[1], 10) - 1;
+        const day = parseInt(md[2], 10);
+        base.setMonth(month, day);
+      }
+    }
+  }
+
+  // Time patterns
+  const timeMatch = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM|上午|下午)?/i);
+  if (timeMatch) {
+    let hours = parseInt(timeMatch[1], 10);
+    const minutes = parseInt(timeMatch[2], 10);
+    const suffix = (timeMatch[3] || '').toUpperCase();
+
+    if (suffix === 'PM' || suffix === '下午') {
+      if (hours !== 12) hours += 12;
+    } else if (suffix === 'AM' || suffix === '上午') {
+      if (hours === 12) hours = 0;
+    }
+
+    base.setHours(hours, minutes, 0, 0);
+    return base.getTime();
+  }
+
+  // Unknown/unparseable timestamp formats: return "now" so ordering is best-effort
+  // and the caller can still store the message. This is preferable to throwing,
+  // but may reduce chronological accuracy on some UIs.
+  return Date.now();
+}
+
+/**
+ * 设置可编辑元素的文本内容
+ * 支持 input/textarea 和 contenteditable 元素
+ */
+export function setEditableText(element: Element | null, text: string): boolean {
+  if (!element) return false;
+
+  try {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      element.value = text;
+      return true;
+    }
+
+    if (element instanceof HTMLElement) {
+      const isContentEditable =
+        element.isContentEditable || element.getAttribute('contenteditable') === 'true';
+      if (!isContentEditable) return false;
+
+      const doc = element.ownerDocument;
+      const selection = typeof doc.getSelection === 'function' ? doc.getSelection() : null;
+      if (!selection) return false;
+
+      const range = doc.createRange();
+      range.selectNodeContents(element);
+      range.deleteContents();
+
+      const node = doc.createTextNode(text);
+      range.insertNode(node);
+
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 触发 input 事件通知框架文本已更改
+ * 兼容不同浏览器和框架的事件处理
+ */
+export function dispatchInputLikeEvent(element: Element | null, text: string): boolean {
+  if (!element) return false;
+
+  const dispatch = (event: Event): boolean => {
+    try {
+      if (typeof (element as Element).dispatchEvent !== 'function') return false;
+      return (element as Element).dispatchEvent(event);
+    } catch {
+      return false;
+    }
+  };
+
+  const win = element.ownerDocument?.defaultView;
+  const InputEventCtor = win?.InputEvent ?? (typeof InputEvent === 'function' ? InputEvent : undefined);
+  const EventCtor = win?.Event ?? Event;
+
+  if (typeof InputEventCtor === 'function') {
+    try {
+      return dispatch(
+        new InputEventCtor('input', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          data: text,
+          inputType: 'insertText',
+        })
+      );
+    } catch {
+      // Some environments expose InputEvent but don't allow constructing it.
+    }
+  }
+
+  return dispatch(
+    new EventCtor('input', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    })
+  );
+}

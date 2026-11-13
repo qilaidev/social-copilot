@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+packages/*/node_modules/
+social-copilot/node_modules/
+social-copilot/packages/*/node_modules/
+
+# Build outputs
+dist/
+build/
+packages/*/dist/
+social-copilot/dist/
+social-copilot/packages/*/dist/
+social-copilot/packages/*/release/
+*.zip
+coverage/
+.vite/
+packages/*/.vite/
+social-copilot/packages/*/.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# Secrets & Environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.session*
+tdata/
+
+# Editor & OS
+.DS_Store
+.vscode/
+.idea/
+.code/
+.codex/
+**/.git/
+
+# Open-core private modules (kept local)
+private/**
+!private/README.md
+
+# Public export output
+public-export/
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+*.log
+
+# Expo / React Native
+.expo/
+.expo-shared/
+web-build/
+packages/mobile/.expo/
+packages/mobile/.expo-shared/
+packages/mobile/web-build/
+social-copilot/packages/mobile/.expo/
+social-copilot/packages/mobile/.expo-shared/
+social-copilot/packages/mobile/web-build/
+
+# Misc
+*.orig
+.kiro/
+social-copilot/audit-025.json
+.auto-claude/
+.claude_settings.json

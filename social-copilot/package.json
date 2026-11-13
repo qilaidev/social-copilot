@@ -1,0 +1,59 @@
+{
+  "name": "social-copilot",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "description": "Social Copilot (聊天导师) — local-first BYOK AI chat reply assistant Chrome/Edge extension for Telegram Web, WhatsApp Web, and Slack Web",
+  "keywords": [
+    "ai-chat-assistant",
+    "ai-reply-assistant",
+    "browser-extension",
+    "chrome-extension",
+    "telegram",
+    "whatsapp",
+    "slack",
+    "local-first",
+    "byok",
+    "llm",
+    "typescript",
+    "social-copilot",
+    "manifest-v3"
+  ],
+  "homepage": "https://github.com/qilaidev/social-copilot#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qilaidev/social-copilot.git",
+    "directory": "social-copilot"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -r --filter \"./packages/*\" --if-present dev",
+    "build": "pnpm -r --filter \"./packages/*\" --if-present build",
+    "build:extension": "pnpm --filter @social-copilot/browser-extension build",
+    "build:extension:release": "SC_RELEASE=1 pnpm --filter @social-copilot/browser-extension build",
+    "check:boundaries": "node scripts/check-core-boundaries.mjs",
+    "audit:025": "node scripts/audit-025.mjs",
+    "test": "pnpm -r --filter \"./packages/*\" --if-present test",
+    "test:coverage": "pnpm -r --filter \"./packages/*\" --if-present test:coverage",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "pnpm -r --filter \"./packages/*\" --if-present typecheck",
+    "ci:local": "node scripts/ci-local.mjs",
+    "e2e:smoke": "pnpm build:extension && node scripts/e2e-smoke.mjs",
+    "validate:release": "node scripts/validate-release.mjs",
+    "package:extension": "node scripts/package-extension.mjs",
+    "release:extension": "pnpm build:extension:release && pnpm validate:release && pnpm package:extension"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.4",
+    "@typescript-eslint/parser": "^8.59.4",
+    "@vitest/coverage-v8": "^4.1.6",
+    "eslint": "^10.4.0",
+    "playwright-core": "^1.60.0",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=10.0.0"
+  }
+}

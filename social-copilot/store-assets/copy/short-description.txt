@@ -1,0 +1,1 @@
+Social Copilot 为 Telegram/WhatsApp/Slack 提供 AI 回复建议：本地优先、隐私可控、多模型支持。

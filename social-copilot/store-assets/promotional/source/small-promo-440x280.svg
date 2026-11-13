@@ -1,0 +1,28 @@
+<svg width="440" height="280" viewBox="0 0 440 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="440" height="280" fill="#146C6F"/>
+  <path d="M0 0H440V280H0V0Z" fill="url(#paint0_linear)"/>
+  <rect x="286" y="34" width="112" height="212" rx="14" fill="white" fill-opacity="0.13" stroke="white" stroke-opacity="0.36"/>
+  <rect x="301" y="58" width="82" height="36" rx="7" fill="white"/>
+  <rect x="301" y="108" width="82" height="55" rx="7" fill="white"/>
+  <rect x="301" y="177" width="82" height="34" rx="7" fill="#1D7B7F"/>
+  <rect x="305" y="66" width="62" height="5" rx="2.5" fill="#9FB4BF"/>
+  <rect x="305" y="78" width="43" height="5" rx="2.5" fill="#D1DAE0"/>
+  <rect x="305" y="118" width="54" height="5" rx="2.5" fill="#9FB4BF"/>
+  <rect x="305" y="130" width="70" height="5" rx="2.5" fill="#D1DAE0"/>
+  <rect x="305" y="142" width="46" height="5" rx="2.5" fill="#D1DAE0"/>
+  <rect x="320" y="190" width="44" height="7" rx="3.5" fill="white" fill-opacity="0.9"/>
+  <rect x="36" y="42" width="52" height="52" rx="10" fill="white" fill-opacity="0.96"/>
+  <path d="M52.58 74.5C49.22 74.5 46.72 73.74 45.08 72.22C43.44 70.7 42.62 68.62 42.62 65.98H50.06C50.06 67 50.32 67.8 50.84 68.38C51.38 68.94 52.15 69.22 53.15 69.22C54.05 69.22 54.73 69.02 55.19 68.62C55.67 68.22 55.91 67.69 55.91 67.03C55.91 66.29 55.61 65.72 55.01 65.32C54.43 64.9 53.42 64.47 51.98 64.03C48.94 63.13 46.75 62.05 45.41 60.79C44.09 59.51 43.43 57.83 43.43 55.75C43.43 53.29 44.31 51.34 46.07 49.9C47.83 48.44 50.16 47.71 53.06 47.71C56.02 47.71 58.39 48.46 60.17 49.96C61.95 51.46 62.84 53.57 62.84 56.29H55.4C55.4 55.43 55.18 54.74 54.74 54.22C54.32 53.7 53.67 53.44 52.79 53.44C52.03 53.44 51.45 53.62 51.05 53.98C50.65 54.34 50.45 54.83 50.45 55.45C50.45 56.11 50.75 56.63 51.35 57.01C51.95 57.39 52.99 57.8 54.47 58.24C57.31 59.08 59.43 60.16 60.83 61.48C62.25 62.78 62.96 64.57 62.96 66.85C62.96 69.19 62.09 71.04 60.35 72.4C58.63 73.8 56.04 74.5 52.58 74.5ZM77.16 74.5C73.1 74.5 69.92 73.31 67.62 70.93C65.34 68.53 64.2 65.24 64.2 61.06C64.2 56.82 65.35 53.53 67.65 51.19C69.95 48.87 73.12 47.71 77.16 47.71C80.56 47.71 83.29 48.56 85.35 50.26C87.43 51.96 88.65 54.37 89.01 57.49H81.42C81.08 56.27 80.57 55.38 79.89 54.82C79.23 54.24 78.31 53.95 77.13 53.95C75.39 53.95 74.06 54.57 73.14 55.81C72.22 57.03 71.76 58.78 71.76 61.06C71.76 63.36 72.22 65.13 73.14 66.37C74.06 67.61 75.39 68.23 77.13 68.23C78.33 68.23 79.27 67.93 79.95 67.33C80.65 66.73 81.16 65.78 81.48 64.48H89.04C88.7 67.72 87.5 70.2 85.44 71.92C83.4 73.64 80.64 74.5 77.16 74.5Z" fill="#146C6F"/>
+  <text x="36" y="130" fill="white" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="800">Social Copilot</text>
+  <text x="36" y="166" fill="white" fill-opacity="0.86" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="600">AI reply suggestions for chat</text>
+  <text x="36" y="196" fill="white" fill-opacity="0.72" font-family="Inter, Arial, sans-serif" font-size="14">Telegram / WhatsApp / Slack</text>
+  <rect x="36" y="220" width="176" height="28" rx="14" fill="white" fill-opacity="0.16" stroke="white" stroke-opacity="0.22"/>
+  <text x="50" y="239" fill="white" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700">Local-first privacy controls</text>
+  <defs>
+    <linearGradient id="paint0_linear" x1="31" y1="20" x2="430" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#146C6F"/>
+      <stop offset="0.56" stop-color="#293241"/>
+      <stop offset="1" stop-color="#8A4F12"/>
+    </linearGradient>
+  </defs>
+</svg>

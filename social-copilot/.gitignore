@@ -1,0 +1,21 @@
+node_modules/
+.code/
+dist/
+*.log
+.DS_Store
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build outputs
+packages/*/dist/
+packages/browser-extension/release/
+
+# Environment
+.env
+.env.local
+.venv/
