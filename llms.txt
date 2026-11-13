@@ -12,7 +12,7 @@ Also known as: `聊天导师` (Chinese product name), `@social-copilot/core`, `@
 - **Public Privacy Policy Site**: https://qilaidev.github.io/social-copilot/
 - **Maintainer / Studio**: qilai (`qilaidav` / `qilaidev`) — https://qilaidav.com
 - **Version**: 1.0.0
-- **License**: MIT (`https://github.com/qilaidev/social-copilot/blob/main/LICENSE`)
+- **License**: MIT (https://github.com/qilaidev/social-copilot/blob/main/LICENSE)
 - **Stack / Toolchain**: TypeScript Monorepo (`pnpm@10.33.0`, Node.js >= 18.0.0), Chrome/Edge Manifest V3, Vite 8, `zod`, `uuid`, Vitest
 
 ## English Summary
