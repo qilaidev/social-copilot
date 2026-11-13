@@ -44,13 +44,13 @@
     "release:extension": "pnpm build:extension:release && pnpm validate:release && pnpm package:extension"
   },
   "devDependencies": {
-    "@types/node": "^25.9.0",
-    "@typescript-eslint/eslint-plugin": "^8.59.4",
-    "@typescript-eslint/parser": "^8.59.4",
-    "@vitest/coverage-v8": "^4.1.6",
-    "eslint": "^10.4.0",
-    "playwright-core": "^1.60.0",
-    "typescript": "^6.0.3"
+    "@types/node": "^26.6.6",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
+    "@vitest/coverage-v8": "^5.1.0",
+    "eslint": "^10.14.0",
+    "playwright-core": "^1.65.0",
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=18.0.0",
