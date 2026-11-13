@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Social Copilot Store Visuals</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1f2933;
+        --muted: #637083;
+        --line: #d7dde7;
+        --panel: #ffffff;
+        --soft: #f5f7fb;
+        --brand: #146c6f;
+        --brand-2: #8a4f12;
+        --good: #28724f;
+        --warn: #9a5a00;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        width: 1280px;
+        min-height: 800px;
+        overflow: hidden;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background: #eef2f6;
+      }
+
+      .frame {
+        position: relative;
+        width: 1280px;
+        height: 800px;
+        padding: 34px;
+        background:
+          linear-gradient(90deg, rgba(20, 108, 111, 0.1), rgba(138, 79, 18, 0.08)),
+          #eef2f6;
+      }
+
+      .browser {
+        height: 732px;
+        overflow: hidden;
+        border: 1px solid #c9d1dc;
+        border-radius: 8px;
+        background: #f8fafc;
+        box-shadow: 0 18px 55px rgba(38, 49, 64, 0.16);
+      }
+
+      .chrome {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        height: 44px;
+        padding: 0 16px;
+        border-bottom: 1px solid #d8dee8;
+        background: #ffffff;
+      }
+
+      .dots {
+        display: flex;
+        gap: 7px;
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+
+      .dot.red {
+        background: #ef6a5f;
+      }
+
+      .dot.yellow {
+        background: #f4bd50;
+      }
+
+      .dot.green {
+        background: #61c554;
+      }
+
+      .url {
+        flex: 1;
+        height: 28px;
+        padding: 5px 12px;
+        border: 1px solid #dde3eb;
+        border-radius: 6px;
+        color: #6b7788;
+        background: #f4f6f9;
+        font-size: 13px;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        height: 688px;
+      }
+
+      .sidebar {
+        border-right: 1px solid #dce2eb;
+        background: #ffffff;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 20px;
+        border-bottom: 1px solid #e5eaf1;
+      }
+
+      .logo {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        color: #ffffff;
+        background: var(--brand);
+        font-weight: 800;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.1;
+      }
+
+      .brand p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .nav {
+        padding: 14px 12px;
+      }
+
+      .nav div {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        padding: 11px 12px;
+        border-radius: 6px;
+        color: #4c596b;
+        font-size: 14px;
+      }
+
+      .nav div.active {
+        color: #0d5356;
+        background: #e7f2f1;
+        font-weight: 700;
+      }
+
+      .content {
+        position: relative;
+        background: #f6f8fb;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 64px;
+        padding: 0 28px;
+        border-bottom: 1px solid #dce2eb;
+        background: #ffffff;
+      }
+
+      .topbar h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .badge {
+        padding: 6px 10px;
+        border: 1px solid #b9d8d4;
+        border-radius: 999px;
+        color: #0d5356;
+        background: #edf8f6;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .workspace {
+        position: relative;
+        height: 624px;
+        padding: 24px 30px;
+      }
+
+      .chat {
+        display: grid;
+        gap: 14px;
+        width: 560px;
+      }
+
+      .message {
+        max-width: 470px;
+        padding: 12px 14px;
+        border: 1px solid #d7dee8;
+        border-radius: 8px;
+        background: #ffffff;
+        font-size: 15px;
+        line-height: 1.45;
+      }
+
+      .message.me {
+        margin-left: 90px;
+        color: #093f42;
+        background: #e8f5f3;
+      }
+
+      .composer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 560px;
+        margin-top: 18px;
+        padding: 10px;
+        border: 1px solid #d2dae5;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .composer span {
+        flex: 1;
+        color: #7a8492;
+      }
+
+      .send {
+        padding: 8px 13px;
+        border-radius: 6px;
+        color: #ffffff;
+        background: var(--brand);
+        font-weight: 700;
+      }
+
+      .copilot {
+        position: absolute;
+        top: 80px;
+        right: 36px;
+        width: 430px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 22px 50px rgba(31, 41, 51, 0.18);
+      }
+
+      .copilot header {
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 16px;
+        border-bottom: 1px solid #e3e8ef;
+      }
+
+      .copilot header strong {
+        font-size: 16px;
+      }
+
+      .tone {
+        margin: 14px 16px 0;
+        padding: 10px 12px;
+        border: 1px solid #b8d8d3;
+        border-radius: 6px;
+        color: #0e5558;
+        background: #eef8f6;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        padding: 14px 16px 6px;
+      }
+
+      .card {
+        padding: 10px;
+        border: 1px solid #d8dee8;
+        border-radius: 6px;
+        background: #f8fafc;
+        font-size: 12px;
+      }
+
+      .card strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--brand);
+      }
+
+      .candidate {
+        margin: 10px 16px;
+        padding: 12px;
+        border: 1px solid #d7dee8;
+        border-radius: 7px;
+        background: #ffffff;
+        font-size: 14px;
+        line-height: 1.48;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .button {
+        padding: 7px 10px;
+        border: 1px solid #b9c5d2;
+        border-radius: 6px;
+        background: #ffffff;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .button.primary {
+        border-color: var(--brand);
+        color: #ffffff;
+        background: var(--brand);
+      }
+
+      .settings-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .settings-panel {
+        min-height: 166px;
+        padding: 18px;
+        border: 1px solid #d7dee8;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .settings-panel h3 {
+        margin: 0 0 13px;
+        font-size: 17px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+        margin: 12px 0;
+      }
+
+      .field label {
+        color: #4d596a;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .input {
+        height: 34px;
+        padding: 7px 10px;
+        border: 1px solid #cfd8e3;
+        border-radius: 6px;
+        color: #536071;
+        background: #f8fafc;
+        font-size: 13px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid #eef2f6;
+        font-size: 14px;
+      }
+
+      .toggle {
+        width: 42px;
+        height: 22px;
+        border-radius: 999px;
+        background: #c7d0dc;
+      }
+
+      .toggle.on {
+        background: var(--brand);
+      }
+
+      .diagnostic {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .code {
+        padding: 16px;
+        border: 1px solid #d8dee8;
+        border-radius: 8px;
+        background: #17202b;
+        color: #dce8ef;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .privacy-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .privacy-item {
+        padding: 14px;
+        border: 1px solid #d8dee8;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .privacy-item strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .privacy-item span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .platforms {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
+      }
+
+      .platform {
+        min-height: 430px;
+        padding: 18px;
+        border: 1px solid #d7dee8;
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .platform h3 {
+        margin: 0 0 10px;
+      }
+
+      .mini-chat {
+        display: grid;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .mini-msg {
+        padding: 10px;
+        border-radius: 7px;
+        background: #f0f3f7;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .mini-msg.reply {
+        color: #0d5356;
+        background: #e7f2f1;
+      }
+
+      .status {
+        display: inline-block;
+        margin-top: 14px;
+        padding: 6px 9px;
+        border-radius: 999px;
+        color: #21533e;
+        background: #e8f5ee;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .promo {
+        display: grid;
+        grid-template-columns: 1fr 174px;
+        gap: 16px;
+        width: 440px;
+        height: 280px;
+        padding: 28px;
+        color: #ffffff;
+        background: linear-gradient(135deg, #146c6f, #293241 58%, #8a4f12);
+      }
+
+      .promo[hidden] {
+        display: none;
+      }
+
+      .promo h1 {
+        margin: 0 0 8px;
+        font-size: 31px;
+        line-height: 1.02;
+      }
+
+      .promo p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .phone {
+        align-self: center;
+        height: 206px;
+        padding: 13px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      .phone div {
+        margin-bottom: 9px;
+        padding: 9px;
+        border-radius: 7px;
+        color: #17323a;
+        background: #ffffff;
+        font-size: 11px;
+      }
+
+      .phone div:last-child {
+        color: #ffffff;
+        background: #1d7b7f;
+      }
+
+      body[data-shot="promo"] {
+        width: 440px;
+        min-height: 280px;
+        background: #ffffff;
+      }
+
+      body[data-shot="promo"] .frame {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="promo" class="promo" hidden>
+      <section>
+        <h1>Social Copilot</h1>
+        <p>AI 回复建议、语气提示与本地优先隐私控制，服务 Telegram / WhatsApp / Slack。</p>
+      </section>
+      <aside class="phone">
+        <div>对方好像有点焦虑，需要支持</div>
+        <div>候选回复：我理解你的担心，我们可以先把最急的点拆开。</div>
+        <div>Insert</div>
+      </aside>
+    </div>
+
+    <main class="frame" id="frame">
+      <section class="browser">
+        <div class="chrome">
+          <div class="dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <div class="url" id="url">https://web.telegram.org/</div>
+          <span class="badge">Local-first</span>
+        </div>
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <div class="logo">SC</div>
+              <div>
+                <h1>Social Copilot</h1>
+                <p>Chat reply assistant</p>
+              </div>
+            </div>
+            <nav class="nav" id="nav"></nav>
+          </aside>
+          <section class="content">
+            <div class="topbar">
+              <h2 id="title">AI 回复建议</h2>
+              <span class="badge" id="badge">Telegram Web</span>
+            </div>
+            <div class="workspace" id="workspace"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const shot = new URLSearchParams(location.search).get("shot") || "panel";
+      document.body.dataset.shot = shot;
+
+      const navItems = ["回复建议", "设置", "隐私与诊断", "平台适配"];
+      const nav = document.querySelector("#nav");
+      const title = document.querySelector("#title");
+      const badge = document.querySelector("#badge");
+      const workspace = document.querySelector("#workspace");
+      const url = document.querySelector("#url");
+
+      if (shot === "promo") {
+        document.querySelector("#promo").hidden = false;
+      }
+
+      function setNav(active) {
+        nav.innerHTML = navItems
+          .map((item) => `<div class="${item === active ? "active" : ""}"><span>${item}</span><span>›</span></div>`)
+          .join("");
+      }
+
+      function panel() {
+        setNav("回复建议");
+        title.textContent = "AI 回复建议";
+        badge.textContent = "Telegram Web";
+        workspace.innerHTML = `
+          <div class="chat">
+            <div class="message">今天状态有点差，那个方案我可能赶不上了。</div>
+            <div class="message me">别硬扛。你先说最卡的部分，我帮你拆一下。</div>
+            <div class="message">主要是不确定怎么回复客户，怕显得太敷衍。</div>
+            <div class="composer"><span>Message</span><div class="send">Send</div></div>
+          </div>
+          <aside class="copilot">
+            <header><strong>Social Copilot</strong><span>Alt+S</span></header>
+            <div class="tone">对方语气偏焦虑，主要意图是寻求支持。建议先共情，再给一个可执行下一步。</div>
+            <div class="cards">
+              <div class="card"><strong>共情</strong>先承接压力</div>
+              <div class="card"><strong>方案</strong>拆成两步</div>
+              <div class="card"><strong>边界</strong>不替对方承诺</div>
+            </div>
+            <div class="candidate">
+              我理解你担心客户觉得敷衍。可以先承认进度，再给一个明确更新时间，我也可以帮你把这句话压短一点。
+              <div class="actions"><div class="button primary">Insert</div><div class="button">Copy</div></div>
+            </div>
+            <div class="candidate">
+              先别急着硬写，我们把回复拆成“现状 + 下一步 + 时间点”，这样会更稳。
+              <div class="actions"><div class="button primary">Insert</div><div class="button">Copy</div></div>
+            </div>
+          </aside>
+        `;
+      }
+
+      function settings() {
+        setNav("设置");
+        title.textContent = "设置";
+        badge.textContent = "常用配置优先";
+        url.textContent = "chrome-extension://social-copilot/popup/index.html";
+        workspace.innerHTML = `
+          <div class="settings-grid">
+            <section class="settings-panel">
+              <h3>隐私与模型</h3>
+              <div class="field"><label>Provider</label><div class="input">OpenAI / DeepSeek / Claude / NVIDIA / SiliconFlow</div></div>
+              <div class="field"><label>API Key</label><div class="input">仅本地保存，默认不上传自建服务器</div></div>
+              <div class="row"><span>发送前脱敏</span><span class="toggle on"></span></div>
+            </section>
+            <section class="settings-panel">
+              <h3>回复体验</h3>
+              <div class="row"><span>收到消息自动弹出</span><span class="toggle on"></span></div>
+              <div class="field"><label>候选数量</label><div class="input">3</div></div>
+              <div class="field"><label>语言</label><div class="input">跟随对话 / 中文 / English</div></div>
+            </section>
+            <section class="settings-panel">
+              <h3>高级区</h3>
+              <div class="row"><span>Base URL</span><span>可选</span></div>
+              <div class="row"><span>自定义 Prompt</span><span>可选</span></div>
+              <div class="row"><span>自动代理实验</span><span class="toggle"></span></div>
+            </section>
+            <section class="settings-panel">
+              <h3>安全边界</h3>
+              <div class="row"><span>群聊禁用自动发送</span><span class="badge">Enabled</span></div>
+              <div class="row"><span>错误诊断不含原文</span><span class="badge">Enabled</span></div>
+              <div class="row"><span>一键清除本地数据</span><span class="button">Clear</span></div>
+            </section>
+          </div>
+        `;
+      }
+
+      function privacy() {
+        setNav("隐私与诊断");
+        title.textContent = "隐私与诊断";
+        badge.textContent = "No raw messages in diagnostics";
+        workspace.innerHTML = `
+          <div class="diagnostic">
+            <section class="privacy-list">
+              <div class="privacy-item"><strong>默认本地优先</strong><span>偏好、画像和诊断摘要保存在浏览器本地。</span></div>
+              <div class="privacy-item"><strong>上下文最小化</strong><span>只发送必要的最近消息，默认脱敏邮箱、手机号和链接。</span></div>
+              <div class="privacy-item"><strong>自动代理默认关闭</strong><span>高级模式才展示，首次开启需要确认风险，群聊禁用自动发送。</span></div>
+              <div class="privacy-item"><strong>可排障</strong><span>错误码、是否可重试、provider/model 和适配器摘要会进入诊断。</span></div>
+            </section>
+            <pre class="code">{
+  "type": "GENERATE_REPLY",
+  "errorCode": "LLM_RATE_LIMIT",
+  "retriable": true,
+  "provider": "openai",
+  "model": "gpt-4.1-mini",
+  "source": "manual",
+  "adapter": {
+    "platform": "slack",
+    "composerMatched": true
+  },
+  "rawMessage": "[redacted]",
+  "apiKey": "[never exported]"
+}</pre>
+          </div>
+        `;
+      }
+
+      function platforms() {
+        setNav("平台适配");
+        title.textContent = "三平台聊天优先";
+        badge.textContent = "Telegram / WhatsApp / Slack";
+        workspace.innerHTML = `
+          <div class="platforms">
+            <section class="platform">
+              <h3>Telegram Web</h3>
+              <p>适配私聊输入框、消息流和深色模式。</p>
+              <div class="mini-chat"><div class="mini-msg">今晚能不能帮我看下这个回复？</div><div class="mini-msg reply">可以，我先帮你把语气放软一点。</div></div>
+              <span class="status">Content script ready</span>
+            </section>
+            <section class="platform">
+              <h3>WhatsApp Web</h3>
+              <p>支持手动触发和候选复制，避免误发。</p>
+              <div class="mini-chat"><div class="mini-msg">I am not sure how to answer.</div><div class="mini-msg reply">Start with empathy, then suggest one next step.</div></div>
+              <span class="status">Manual control</span>
+            </section>
+            <section class="platform">
+              <h3>Slack Web</h3>
+              <p>面向工作场景，强调清晰、礼貌和上下文边界。</p>
+              <div class="mini-chat"><div class="mini-msg">Can we move the deadline?</div><div class="mini-msg reply">I can propose a revised timeline with tradeoffs.</div></div>
+              <span class="status">Privacy scoped</span>
+            </section>
+          </div>
+        `;
+      }
+
+      if (shot === "settings") settings();
+      else if (shot === "privacy") privacy();
+      else if (shot === "platforms") platforms();
+      else panel();
+    </script>
+  </body>
+</html>

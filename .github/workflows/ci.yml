@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Core Boundary Guard
+        run: pnpm check:boundaries
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Architecture Audit (AUDIT-025)
+        run: node scripts/audit-025.mjs > audit-025.json
+
+      - name: Upload AUDIT-025 Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-025-${{ github.sha }}
+          path: audit-025.json
+          if-no-files-found: error
+
+      - name: Release Build (zip)
+        run: pnpm release:extension
+
+      - name: Upload Extension Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: social-copilot-extension-${{ github.sha }}
+          path: packages/browser-extension/release/*.zip
+          if-no-files-found: error

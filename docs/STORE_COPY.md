@@ -1,0 +1,60 @@
+# Chrome Web Store 文案模板
+
+> 这是一份可直接用于 Chrome Web Store 的文案模板（中文为主，必要处附英文）。
+> 发布前请将括号中的占位内容替换为你的信息。
+
+## 简短说明（Short description，最多 132 字符）
+
+Social Copilot 为 Telegram/WhatsApp/Slack 提供 AI 回复建议：本地优先、隐私可控、多模型支持。
+
+## 详细说明（Detailed description）
+
+Social Copilot（聊天导师）是一款面向 Telegram Web、WhatsApp Web、Slack Web 的 AI 回复助手，强调分寸感与效率。你可以在收到消息后快速生成 2~3 条候选回复，查看轻量语气/意图提示后再决定插入或复制。
+
+为什么适合你：
+
+- 更得体：轻量语气/意图提示 + 思路卡片推荐回复方向，避免“硬尬”或“过度”
+- 更可控：自动/手动触发可选，群聊默认不自动弹出
+- 更隐私：默认本地存储，发送前可脱敏与限制上下文
+- 更稳妥：多模型可选，主备切换降低失败率
+
+主要功能：
+
+- 智能回复建议：根据上下文生成多风格候选（关心/幽默/随意/理性/正式）
+- 语气/意图提示：识别需要支持、寻求帮助、轻松玩笑或中性语境（仅用于对话辅助，不做心理诊断）
+- 思路卡片：自动推荐回复方向（共情/解决方案/幽默/中性），也可手动选择
+- 插入与复制：点击候选可填充到输入框，也可复制后手动粘贴
+- 本地存储：聊天记录/偏好/画像默认仅保存在浏览器本地
+- 多模型支持：DeepSeek / OpenAI / Claude / NVIDIA，以及内置 SiliconFlow 路径，支持主备故障转移
+- 隐私控制：默认发送前脱敏（邮箱/手机号/链接）并匿名化昵称（我/对方），可在设置中关闭或调整发送上限
+
+使用方式：
+
+1. 在扩展设置中选择模型提供商并填写 API Key
+2. 打开支持的网站并进入任意聊天
+3. 收到消息时自动弹出建议面板（群聊默认不自动弹出，可配置），或按 `Alt+S` 手动触发
+
+## 数据使用披露（Data usage disclosure，建议在描述中明确）
+
+- 扩展会在你触发生成时，将“必要的对话上下文”发送到你选择的第三方模型服务（如 DeepSeek/OpenAI/Anthropic/NVIDIA）或内置服务（SiliconFlow），用于生成候选回复或提取结构化信息。
+- 默认只发送最近 N 条消息（可配置），并对常见敏感信息进行脱敏与昵称匿名化（可关闭）。
+- API Key 仅存储在本地，不会上传到任何自建服务器（本项目默认无自建后端）。
+- 若启用远程选择器配置，扩展会从 `raw.githubusercontent.com` 拉取选择器 JSON（不包含聊天内容）。
+- 自动代理属于高级实验功能，默认关闭；开启前需确认误发风险，且群聊不会自动发送。
+
+## 权限说明（Permissions justification）
+
+- `storage`：保存扩展设置、风格偏好与本地数据索引
+- `host_permissions`：
+  - `https://web.telegram.org/*` / `https://web.whatsapp.com/*` / `https://app.slack.com/*`：注入内容脚本并在页面展示建议面板
+  - `https://api.deepseek.com/*` / `https://api.openai.com/*` / `https://api.anthropic.com/*` / `https://api.siliconflow.cn/*` / `https://integrate.api.nvidia.com/*`：向你选择的模型服务或内置服务发起请求
+  - `https://raw.githubusercontent.com/*`：可选远程选择器配置拉取
+
+## 隐私政策（Privacy policy URL）
+
+请提供可公开访问的隐私政策 URL（模板见仓库 `docs/PRIVACY.md` / `docs/PRIVACY.zh-CN.md`）。
+
+推荐填写：
+
+- 中文：`https://qilaidev.github.io/social-copilot/privacy.zh-CN.html`
+- 英文：`https://qilaidev.github.io/social-copilot/privacy.html`

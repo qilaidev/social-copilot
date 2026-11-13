@@ -1,0 +1,44 @@
+{
+  "name": "@social-copilot/core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Core TypeScript SDK for Social Copilot LLM providers, local memory, profiles, preferences, and prompt hooks.",
+  "keywords": [
+    "llm",
+    "prompt-hooks",
+    "ai-reply-assistant",
+    "local-first",
+    "indexeddb",
+    "typescript",
+    "byok"
+  ],
+  "homepage": "https://github.com/qilaidev/social-copilot/tree/main/packages/core#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qilaidev/social-copilot.git",
+    "directory": "packages/core"
+  },
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/uuid": "^11.0.0",
+    "@vitest/coverage-v8": "^4.1.2",
+    "fake-indexeddb": "^6.2.5",
+    "fast-check": "^4.6.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "uuid": "^14.0.0",
+    "zod": "^4.6.7"
+  }
+}

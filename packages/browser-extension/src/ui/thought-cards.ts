@@ -1,0 +1,229 @@
+import type { ThoughtCard, ThoughtType } from '@social-copilot/core';
+
+const MAX_CARDS = 6;
+
+export interface ThoughtCardsOptions {
+  onSelect: (thought: ThoughtType | null) => void;
+}
+
+/**
+ * 思路卡片 UI 组件
+ * 在面板顶部展示可点击的思路选项
+ */
+export class ThoughtCardsComponent {
+  private container: HTMLElement | null = null;
+  private parentElement: HTMLElement | null = null;
+  private cards: ThoughtCard[] = [];
+  private selectedThought: ThoughtType | null = null;
+  private options: ThoughtCardsOptions;
+  private abortController: AbortController | null = null;
+  private cardClickHandler: ((e: Event) => void) | null = null;
+
+  constructor(options: ThoughtCardsOptions) {
+    this.options = options;
+    this.restoreSelection();
+  }
+
+  /**
+   * 渲染思路卡片到指定容器
+   */
+  render(parentElement: HTMLElement): void {
+    this.parentElement = parentElement;
+
+    if (this.container) {
+      this.unbindEvents();
+      this.container.remove();
+      this.container = null;
+    }
+
+    if (this.cards.length === 0) {
+      return;
+    }
+
+    this.container = document.createElement('div');
+    this.container.className = 'sc-thought-cards';
+    this.container.appendChild(this.renderCards());
+    parentElement.insertBefore(this.container, parentElement.firstChild);
+
+    this.bindEvents();
+  }
+
+  /**
+   * 更新可用的思路卡片
+   */
+  setCards(cards: ThoughtCard[]): void {
+    const truncatedCards = cards.slice(0, MAX_CARDS);
+    this.cards = truncatedCards;
+    const availableTypes = new Set(truncatedCards.map((card) => card.type));
+
+    // 如果当前选中的思路不再可用，则重置选择
+    // 注意：当 cards 为空时，代表“暂无推荐”，不应清除用户的历史选择。
+    if (availableTypes.size > 0 && this.selectedThought && !availableTypes.has(this.selectedThought)) {
+      this.selectedThought = null;
+      this.saveSelection();
+    }
+
+    this.update();
+  }
+
+  /**
+   * 获取当前选中的思路类型
+   */
+  getSelectedThought(): ThoughtType | null {
+    return this.selectedThought;
+  }
+
+  /**
+   * 取消当前进行中的请求
+   */
+  cancelPendingRequest(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+  }
+
+  /**
+   * 创建新的 AbortController 用于请求
+   */
+  createAbortController(): AbortController {
+    this.cancelPendingRequest();
+    this.abortController = new AbortController();
+    return this.abortController;
+  }
+
+  /**
+   * 清理组件
+   */
+  destroy(): void {
+    this.cancelPendingRequest();
+    this.unbindEvents();
+    this.container?.remove();
+    this.container = null;
+    this.parentElement = null;
+  }
+
+  private renderCards(): DocumentFragment {
+    const frag = document.createDocumentFragment();
+
+    for (const card of this.cards) {
+      const isActive = this.selectedThought === card.type;
+
+      const cardEl = document.createElement('div');
+      cardEl.className = `sc-thought-card${isActive ? ' sc-thought-card--active' : ''}`;
+      cardEl.setAttribute('data-type', card.type);
+      cardEl.setAttribute('tabindex', '0');
+      cardEl.setAttribute('role', 'button');
+      cardEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+
+      const icon = document.createElement('span');
+      icon.className = 'sc-thought-icon';
+      icon.textContent = card.icon;
+
+      const label = document.createElement('span');
+      label.className = 'sc-thought-label';
+      label.textContent = card.label;
+
+      cardEl.appendChild(icon);
+      cardEl.appendChild(label);
+
+      frag.appendChild(cardEl);
+    }
+
+    return frag;
+  }
+
+  private update(): void {
+    if (this.cards.length === 0) {
+      if (this.container) {
+        this.unbindEvents();
+        this.container.remove();
+        this.container = null;
+      }
+      return;
+    }
+
+    if (!this.container) {
+      if (!this.parentElement) return;
+      this.container = document.createElement('div');
+      this.container.className = 'sc-thought-cards';
+      this.parentElement.insertBefore(this.container, this.parentElement.firstChild);
+      this.bindEvents();
+    }
+
+    while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
+    this.container.appendChild(this.renderCards());
+  }
+
+  private bindEvents(): void {
+    if (!this.container) return;
+
+    this.cardClickHandler = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const cardEl = target.closest('.sc-thought-card');
+      if (!cardEl) return;
+
+      // 处理键盘事件 (Enter/Space)
+      if (e.type === 'keydown') {
+        const keyEvent = e as KeyboardEvent;
+        if (keyEvent.key !== 'Enter' && keyEvent.key !== ' ') {
+          return;
+        }
+        // 防止 Space 键滚动页面
+        if (keyEvent.key === ' ') {
+          e.preventDefault();
+        }
+      }
+
+      const type = cardEl.getAttribute('data-type') as ThoughtType;
+      this.handleCardClick(type);
+    };
+
+    this.container.addEventListener('click', this.cardClickHandler);
+    this.container.addEventListener('keydown', this.cardClickHandler);
+  }
+
+  private unbindEvents(): void {
+    if (this.container && this.cardClickHandler) {
+      this.container.removeEventListener('click', this.cardClickHandler);
+      this.container.removeEventListener('keydown', this.cardClickHandler);
+      this.cardClickHandler = null;
+    }
+  }
+
+  private handleCardClick(type: ThoughtType): void {
+    // 取消待处理的请求
+    this.cancelPendingRequest();
+
+    // 切换选中状态
+    if (this.selectedThought === type) {
+      this.selectedThought = null;
+    } else {
+      this.selectedThought = type;
+    }
+
+    // 保存选择到 sessionStorage
+    this.saveSelection();
+
+    // 更新 UI
+    this.update();
+
+    // 通知外部
+    this.options.onSelect(this.selectedThought);
+  }
+
+  private saveSelection(): void {
+    if (this.selectedThought) {
+      sessionStorage.setItem('sc-thought-selection', this.selectedThought);
+    } else {
+      sessionStorage.removeItem('sc-thought-selection');
+    }
+  }
+
+  private restoreSelection(): void {
+    const saved = sessionStorage.getItem('sc-thought-selection');
+    if (saved && ['empathy', 'solution', 'humor', 'neutral'].includes(saved)) {
+      this.selectedThought = saved as ThoughtType;
+    }
+  }
+}

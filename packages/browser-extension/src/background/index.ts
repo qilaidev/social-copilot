@@ -1,0 +1,3291 @@
+import {
+  IndexedDBStore,
+  ProfileUpdater,
+  LLMManager,
+  PromptHookRegistry,
+  StylePreferenceManager,
+  ThoughtPreferenceManager,
+  ThoughtAnalyzer,
+  ReplyParseError,
+  parseJsonObjectFromText,
+  redactPii,
+  sanitizeOutboundContext,
+  redactSecrets,
+  BUILTIN_MODEL,
+} from '@social-copilot/core';
+import {
+  addRuntimeOnInstalledListener,
+  addRuntimeOnMessageListener,
+  addRuntimeOnStartupListener,
+  runtimeGetId,
+  runtimeGetManifestVersion,
+  runtimeOpenOptionsPage,
+  storageLocalClear,
+  storageLocalGet,
+  storageLocalRemove,
+  storageLocalSet,
+  storageSessionGet,
+  storageSessionRemove,
+  storageSessionSet,
+} from '../utils/webext';
+import { getRemoteSelectorsDiagnostics } from '../utils/remote-config';
+import type {
+  Message,
+  ContactKey,
+  LLMInput,
+  ReplyStyle,
+  ContactProfile,
+  StylePreference,
+  ThoughtPreference,
+  ContactMemorySummary,
+  LLMProvider,
+  ThoughtType,
+  ConversationContext,
+} from '@social-copilot/core';
+import {
+  ContactKeySchema,
+  ContactProfileSchema,
+  contactKeyToString,
+  contactKeyToStringV1,
+  legacyContactKeyToString,
+  normalizeContactKeyStr,
+  ReplyStyleSchema,
+  THOUGHT_CARDS,
+  UserDataBackupSchema,
+  GenerateReplyPayloadSchema,
+  AnalyzeThoughtPayloadSchema,
+  ConfigSchema,
+  formatZodError,
+} from '@social-copilot/core';
+import type { ProviderType, LLMManagerConfig } from '@social-copilot/core';
+import { interpolateCustomPrompt } from './custom-prompts';
+
+const IS_RELEASE = __SC_RELEASE__;
+
+type CacheStrategy = 'off' | 'auto' | 'always';
+
+type DiagnosticEventType =
+  | 'GENERATE_REPLY'
+  | 'ANALYZE_THOUGHT'
+  | 'SET_CONFIG'
+  | 'TEST_CONNECTION'
+  | 'ACK_PRIVACY'
+  | 'FALLBACK'
+  | 'RECOVERY'
+  | 'ALL_FAILED'
+  | 'MEMORY_UPDATE'
+  | 'BACKGROUND_ERROR'
+  | 'ADAPTER_HEALTH'
+  | 'CONTENT_SCRIPT_ERROR'
+  | 'AUTO_COOLDOWN'
+  | 'AUTO_AGENT'
+  | 'GET_STATUS'
+  | 'GET_PROFILE'
+  | 'UPDATE_PROFILE'
+  | 'GET_CONTACT_MEMORY'
+  | 'CLEAR_CONTACT_MEMORY'
+  | 'RECORD_STYLE_SELECTION'
+  | 'GET_STYLE_PREFERENCE'
+  | 'RESET_STYLE_PREFERENCE'
+  | 'RESET_THOUGHT_PREFERENCE'
+  | 'EXPORT_PREFERENCES'
+  | 'EXPORT_USER_DATA'
+  | 'EXPORT_USER_DATA_JSON'
+  | 'IMPORT_USER_DATA'
+  | 'GET_CONTACTS'
+  | 'GET_CONTACTS_WITH_PREFS'
+  | 'CLEAR_DATA'
+  | 'CLEAR_CONTACT_DATA'
+  | 'CLEAR_API_KEYS'
+  | 'SET_DEBUG_ENABLED'
+  | 'GET_DIAGNOSTICS'
+  | 'GET_DIAGNOSTICS_JSON'
+  | 'CLEAR_DIAGNOSTICS'
+  | 'CANCEL_REQUEST'
+  | 'UNKNOWN';
+
+interface DiagnosticEvent {
+  ts: number;
+  type: DiagnosticEventType;
+  requestId: string;
+  durationMs?: number;
+  ok: boolean;
+  details?: Record<string, unknown>;
+  error?: { name: string; message: string; stack?: string };
+}
+
+// 配置类型
+interface Config {
+  advancedMode?: boolean;
+  apiKey: string;
+  provider: ProviderType;
+  /** 可选：覆盖 provider 默认 Base URL（不要包含 /v1） */
+  baseUrl?: string;
+  /** 允许 http Base URL（默认 false） */
+  allowInsecureHttp?: boolean;
+  /** 允许本地/私有地址（默认 false） */
+  allowPrivateHosts?: boolean;
+  /** 可选：指定模型名称（不填则使用 provider 默认） */
+  model?: string;
+  styles: ReplyStyle[];
+  /** 回复语言：auto 推荐，按对话自动选择 */
+  language?: 'zh' | 'en' | 'auto';
+  /** 收到消息自动生成建议（默认 true；关闭后仅手动触发） */
+  autoTrigger?: boolean;
+  /** 是否在群聊中自动弹出（默认 false，仍可手动 Alt+S） */
+  autoInGroups?: boolean;
+  /** 自动代理：收到消息后自动生成并发送（默认 false） */
+  autoAgent?: boolean;
+  /** 自定义系统提示词（追加到系统提示词末尾） */
+  customSystemPrompt?: string;
+  /** 自定义用户提示词（追加到 user prompt 末尾） */
+  customUserPrompt?: string;
+  /** 发送给模型的最近消息条数（当前消息始终包含） */
+  contextMessageLimit?: number;
+  /** 发送前脱敏（邮箱/手机号/链接） */
+  redactPii?: boolean;
+  /** 发送前匿名化昵称（用“我/对方”替代） */
+  anonymizeSenders?: boolean;
+  /** 单条消息最大字符数 */
+  maxCharsPerMessage?: number;
+  /** 上下文总字符预算 */
+  maxTotalChars?: number;
+  /** 温度（0-100，UI 量化） */
+  temperature?: number;
+  fallbackProvider?: ProviderType;
+  /** 可选：覆盖 fallback provider 默认 Base URL（不要包含 /v1） */
+  fallbackBaseUrl?: string;
+  /** 允许 fallback 的 http Base URL（默认 false） */
+  fallbackAllowInsecureHttp?: boolean;
+  /** 允许 fallback 本地/私有地址（默认 false） */
+  fallbackAllowPrivateHosts?: boolean;
+  /** 可选：指定备用模型名称（不填则使用 provider 默认） */
+  fallbackModel?: string;
+  fallbackApiKey?: string;
+  enableFallback?: boolean;
+  suggestionCount?: number;
+  /** 回复结果缓存策略（auto: 仅自动触发使用缓存） */
+  cacheStrategy?: CacheStrategy;
+  /** 是否启用长期记忆摘要（默认关闭） */
+  enableMemory?: boolean;
+  /** 是否持久化存储 API Key（默认不持久化以降低泄漏风险） */
+  persistApiKey?: boolean;
+  /** 用户是否已确认隐私告知（未确认则不调用第三方模型） */
+  privacyAcknowledged?: boolean;
+}
+
+function applyReleaseRestrictions(config: Config): Config {
+  if (!IS_RELEASE) return config;
+  return {
+    ...config,
+    allowInsecureHttp: false,
+    allowPrivateHosts: false,
+    fallbackAllowInsecureHttp: false,
+    fallbackAllowPrivateHosts: false,
+  };
+}
+
+// 初始化存储
+const store = new IndexedDBStore();
+let storeReady: Promise<void> | null = null;
+let storeInitError: Error | null = null;
+let llmManager: LLMManager | null = null;
+let profileUpdater: ProfileUpdater | null = null;
+let preferenceManager: StylePreferenceManager | null = null;
+let thoughtPreferenceManager: ThoughtPreferenceManager | null = null;
+let currentConfig: Config | null = null;
+let fallbackModeActive = false;
+const DEFAULT_STYLES: ReplyStyle[] = ['caring', 'humorous', 'casual'];
+const activeGenerateRequests: Map<string, AbortController> = new Map();
+
+const lastProfileUpdateCount: Map<string, number> = new Map();
+const profileUpdateInFlight: Set<string> = new Set();
+const lastMemoryUpdateCount: Map<string, number> = new Map();
+const lastMemoryUpdateFailureAt: Map<string, number> = new Map();
+const memoryUpdateFailureCount: Map<string, number> = new Map();
+const memoryUpdateInFlight: Set<string> = new Set();
+
+const PROFILE_UPDATE_COUNT_STORAGE_KEY = 'profileUpdateCounts';
+const MEMORY_UPDATE_COUNT_STORAGE_KEY = 'memoryUpdateCounts';
+const DEBUG_ENABLED_STORAGE_KEY = 'debugEnabled';
+/**
+ * Temporary API key fallback keys stored in chrome.storage.local when
+ * chrome.storage.session is unavailable (MV3 compatibility variance).
+ *
+ * These keys are cleared on browser startup to approximate session-only storage.
+ */
+const SESSION_API_KEY_FALLBACK_STORAGE_KEY = '__sc_session_apiKey';
+const SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY = '__sc_session_fallbackApiKey';
+const SESSION_KEYS_FALLBACK_TIMESTAMP_KEY = '__sc_session_key_ts';
+// Sliding idle TTL for local-session fallback keys (extends on use).
+const SESSION_KEYS_FALLBACK_TTL_MS = 1000 * 60 * 60 * 24;
+/** Ring buffer size for exported diagnostics snapshot. */
+const DIAGNOSTICS_MAX_EVENTS = 200;
+/** Persist diagnostics across MV3 service worker restarts (local-only, no PII/raw chat text). */
+const DIAGNOSTICS_STORAGE_KEY = '__sc_diagnostics_v1';
+/** Throttle persistence to avoid excessive writes. */
+const DIAGNOSTICS_PERSIST_MIN_INTERVAL_MS = 1500;
+const CACHE_TTL_AUTO_MS = 90_000;
+const CACHE_TTL_ALWAYS_MS = 300_000;
+/** Update memory summary every N new messages (per contact) to control cost. */
+const MEMORY_UPDATE_THRESHOLD = 50;
+const MEMORY_CONTEXT_MESSAGE_LIMIT = 50;
+const MEMORY_SUMMARY_MAX_LEN = 1024;
+const MEMORY_UPDATE_FAILURE_BASE_BACKOFF_MS = 60_000;
+const MEMORY_UPDATE_FAILURE_MAX_BACKOFF_MS = 15 * 60_000;
+
+let debugEnabled = false;
+let diagnostics: DiagnosticEvent[] = [];
+let diagnosticsReady: Promise<void> | null = null;
+let diagnosticsDirty = false;
+let diagnosticsLastPersistAt = 0;
+let diagnosticsPersistInFlight: Promise<void> | null = null;
+
+type MessageSenderContext = 'extension_ui' | 'chat_content' | 'unknown';
+
+const CONTENT_SCRIPT_ALLOWED_TYPES = new Set<string>([
+  'GENERATE_REPLY',
+  'ANALYZE_THOUGHT',
+  'ACK_PRIVACY',
+  'OPEN_OPTIONS_PAGE',
+  'CANCEL_REQUEST',
+  'RECORD_STYLE_SELECTION',
+  'SET_PREFERRED_STYLE',
+  'REPORT_ADAPTER_HEALTH',
+  'REPORT_CONTENT_SCRIPT_ERROR',
+  'REPORT_AUTO_COOLDOWN',
+  'REPORT_AUTO_AGENT',
+]);
+
+const UNKNOWN_SENDER_ALLOWED_TYPES = new Set<string>([
+  'GET_STATUS',
+  'CANCEL_REQUEST',
+  'REPORT_ADAPTER_HEALTH',
+  'REPORT_CONTENT_SCRIPT_ERROR',
+  'REPORT_AUTO_COOLDOWN',
+  'REPORT_AUTO_AGENT',
+]);
+
+function debugLog(...args: unknown[]): void {
+  if (debugEnabled) {
+    console.warn(...args);
+  }
+}
+
+function debugWarn(...args: unknown[]): void {
+  if (debugEnabled) {
+    console.warn(...args);
+  }
+}
+
+function debugError(...args: unknown[]): void {
+  if (debugEnabled) {
+    console.error(...args);
+  }
+}
+
+function extractSenderUrl(sender: unknown): string | undefined {
+  if (!sender || typeof sender !== 'object') return undefined;
+  const raw = (sender as Record<string, unknown>).url;
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+function classifyMessageSender(sender: unknown): MessageSenderContext {
+  const urlRaw = extractSenderUrl(sender);
+  if (!urlRaw) return 'unknown';
+
+  let url: URL;
+  try {
+    url = new URL(urlRaw);
+  } catch {
+    return 'unknown';
+  }
+
+  if (url.protocol === 'chrome-extension:' || url.protocol === 'moz-extension:') {
+    return 'extension_ui';
+  }
+
+  if (
+    url.protocol === 'https:' &&
+    (
+      url.hostname === 'web.telegram.org' ||
+      url.hostname === 'web.whatsapp.com' ||
+      url.hostname === 'app.slack.com'
+    )
+  ) {
+    return 'chat_content';
+  }
+
+  return 'unknown';
+}
+
+function isMessageTypeAllowedForSender(type: string, context: MessageSenderContext): boolean {
+  if (context === 'extension_ui') return true;
+  if (context === 'chat_content') return CONTENT_SCRIPT_ALLOWED_TYPES.has(type);
+  return UNKNOWN_SENDER_ALLOWED_TYPES.has(type);
+}
+
+function getMemoryUpdateFailureBackoffMs(failureCount: number): number {
+  const normalized = Number.isFinite(failureCount) ? Math.max(1, Math.floor(failureCount)) : 1;
+  return Math.min(
+    MEMORY_UPDATE_FAILURE_BASE_BACKOFF_MS * (2 ** (normalized - 1)),
+    MEMORY_UPDATE_FAILURE_MAX_BACKOFF_MS
+  );
+}
+
+function generateRequestId(): string {
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    if (typeof DOMException === 'function') {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    const error = new Error('Aborted');
+    error.name = 'AbortError';
+    throw error;
+  }
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function summarizeConversationIdKind(conversationId: string): string {
+  const id = (conversationId ?? '').trim();
+  if (!id) return 'missing';
+  if (id.includes('@g.us')) return 'wa_group_jid';
+  if (id.includes('@c.us') || id.includes('@s.whatsapp.net')) return 'wa_dm_jid';
+  if (id.startsWith('@')) return 'at_handle';
+  if (/^-?\d+$/.test(id)) return 'numeric';
+  if (/^[CDG][A-Z0-9]+$/.test(id)) return 'slack_like';
+  return 'other';
+}
+
+function summarizePathnameKind(pathname: string): string {
+  const path = (pathname ?? '').trim();
+  if (!path || path === '/') return 'root';
+  if (path.startsWith('/client/')) return 'slack_client';
+  if (path.startsWith('/k/')) return 'telegram_k';
+  if (path.startsWith('/a/')) return 'telegram_a';
+  const seg = path.split('/').filter(Boolean)[0] ?? '';
+  if (!seg) return 'other';
+  const cleaned = seg.replace(/[^a-z0-9_-]/gi, '').slice(0, 24);
+  return cleaned ? `seg:${cleaned}` : 'other';
+}
+
+function summarizeContactKeyStrForDiagnostics(contactKeyStr: string): Record<string, unknown> | null {
+  const parts = (contactKeyStr ?? '').split(':').filter((p) => p !== undefined);
+  if (parts.length < 5) return null;
+
+  const groupOrDm = parts[parts.length - 1];
+  if (groupOrDm !== 'group' && groupOrDm !== 'dm') return null;
+
+  // v2: platform:app:accountId:conversationId:(group|dm)
+  if (parts.length === 5) {
+    const platform = safeDecodeURIComponent(parts[0] ?? '');
+    const app = safeDecodeURIComponent(parts[1] ?? '');
+    const accountId = safeDecodeURIComponent(parts[2] ?? '');
+    const conversationId = safeDecodeURIComponent(parts[3] ?? '');
+
+    return {
+      platform,
+      app,
+      isGroup: groupOrDm === 'group',
+      hasAccountId: Boolean(accountId),
+      accountIdLen: accountId.length,
+      conversationIdKind: summarizeConversationIdKind(conversationId),
+      conversationIdLen: conversationId.length,
+    };
+  }
+
+  // v1: platform:app:accountId:conversationId:peerId:(group|dm)
+  if (parts.length === 6) {
+    const platform = safeDecodeURIComponent(parts[0] ?? '');
+    const app = safeDecodeURIComponent(parts[1] ?? '');
+    const accountId = safeDecodeURIComponent(parts[2] ?? '');
+    const conversationId = safeDecodeURIComponent(parts[3] ?? '');
+    const peerId = safeDecodeURIComponent(parts[4] ?? '');
+
+    return {
+      platform,
+      app,
+      isGroup: groupOrDm === 'group',
+      hasAccountId: Boolean(accountId),
+      accountIdLen: accountId.length,
+      conversationIdKind: summarizeConversationIdKind(conversationId),
+      conversationIdLen: conversationId.length,
+      peerIdLen: peerId.length,
+    };
+  }
+
+  return null;
+}
+
+function summarizeContactKeyForDiagnostics(contactKey: ContactKey): Record<string, unknown> | null {
+  try {
+    const accountId = (contactKey.accountId ?? '').toString();
+    const conversationId = (contactKey.conversationId ?? '').toString();
+    const peerId = (contactKey.peerId ?? '').toString();
+
+    return {
+      platform: contactKey.platform,
+      app: contactKey.app,
+      isGroup: Boolean(contactKey.isGroup),
+      hasAccountId: Boolean(accountId),
+      accountIdLen: accountId.length,
+      conversationIdKind: summarizeConversationIdKind(conversationId),
+      conversationIdLen: conversationId.length,
+      peerIdLen: peerId.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeDiagnosticDetails(details: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!details) return undefined;
+  const out: Record<string, unknown> = { ...details };
+
+  // Strip potentially identifying URL paths (e.g. Slack channel IDs in /client/...).
+  if (typeof out.pathname === 'string') {
+    out.pathnameKind = summarizePathnameKind(out.pathname);
+    out.pathnameLen = out.pathname.length;
+    delete out.pathname;
+  }
+
+  // Legacy persisted diagnostics may include identifiers; migrate to safe summaries.
+  if (typeof out.contactKey === 'string') {
+    const summary = summarizeContactKeyStrForDiagnostics(out.contactKey);
+    if (summary) out.contactKeySummary = summary;
+    out.contactKeyLen = out.contactKey.length;
+    delete out.contactKey;
+  }
+
+  if (Array.isArray(out.messages)) {
+    out.messages = out.messages
+      .map((m) => {
+        if (!m || typeof m !== 'object') return null;
+        const rec = m as Record<string, unknown>;
+        const next: Record<string, unknown> = { ...rec };
+        if (typeof next.id === 'string') {
+          next.idLen = next.id.length;
+          delete next.id;
+        }
+        return next;
+      })
+      .filter((v): v is Record<string, unknown> => Boolean(v));
+  }
+
+  return out;
+}
+
+function pushDiagnostic(event: DiagnosticEvent): void {
+  const sanitized: DiagnosticEvent = event.details ? { ...event, details: sanitizeDiagnosticDetails(event.details) } : event;
+  diagnostics.push(sanitized);
+  if (diagnostics.length > DIAGNOSTICS_MAX_EVENTS) {
+    diagnostics = diagnostics.slice(-DIAGNOSTICS_MAX_EVENTS);
+  }
+  diagnosticsDirty = true;
+}
+
+function coerceDiagnosticEventType(value: unknown): DiagnosticEventType {
+  if (typeof value !== 'string') return 'UNKNOWN';
+  switch (value) {
+    case 'GENERATE_REPLY':
+    case 'ANALYZE_THOUGHT':
+    case 'SET_CONFIG':
+    case 'TEST_CONNECTION':
+    case 'ACK_PRIVACY':
+    case 'FALLBACK':
+    case 'RECOVERY':
+    case 'ALL_FAILED':
+    case 'MEMORY_UPDATE':
+    case 'BACKGROUND_ERROR':
+    case 'ADAPTER_HEALTH':
+    case 'CONTENT_SCRIPT_ERROR':
+    case 'AUTO_COOLDOWN':
+    case 'AUTO_AGENT':
+    case 'GET_STATUS':
+    case 'GET_PROFILE':
+    case 'UPDATE_PROFILE':
+    case 'GET_CONTACT_MEMORY':
+    case 'CLEAR_CONTACT_MEMORY':
+    case 'RECORD_STYLE_SELECTION':
+    case 'GET_STYLE_PREFERENCE':
+    case 'RESET_STYLE_PREFERENCE':
+    case 'RESET_THOUGHT_PREFERENCE':
+    case 'EXPORT_PREFERENCES':
+    case 'EXPORT_USER_DATA':
+    case 'EXPORT_USER_DATA_JSON':
+    case 'IMPORT_USER_DATA':
+    case 'GET_CONTACTS':
+    case 'GET_CONTACTS_WITH_PREFS':
+    case 'CLEAR_DATA':
+    case 'CLEAR_CONTACT_DATA':
+    case 'CLEAR_API_KEYS':
+    case 'SET_DEBUG_ENABLED':
+    case 'GET_DIAGNOSTICS':
+    case 'GET_DIAGNOSTICS_JSON':
+    case 'CLEAR_DIAGNOSTICS':
+    case 'CANCEL_REQUEST':
+    case 'UNKNOWN':
+      return value;
+    default:
+      return 'UNKNOWN';
+  }
+}
+
+function parseDiagnosticsPayload(raw: unknown): DiagnosticEvent[] {
+  if (!Array.isArray(raw)) return [];
+
+  const events: DiagnosticEvent[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const ts = typeof record.ts === 'number' && Number.isFinite(record.ts) ? record.ts : null;
+    const ok = typeof record.ok === 'boolean' ? record.ok : null;
+    const requestId = typeof record.requestId === 'string' ? record.requestId : null;
+    const type = coerceDiagnosticEventType(record.type);
+    if (ts === null || ok === null || requestId === null) continue;
+
+    const durationMs = typeof record.durationMs === 'number' && Number.isFinite(record.durationMs)
+      ? record.durationMs
+      : undefined;
+    const details = record.details && typeof record.details === 'object' && !Array.isArray(record.details)
+      ? sanitizeDiagnosticDetails(record.details as Record<string, unknown>)
+      : undefined;
+    const error = record.error && typeof record.error === 'object' && !Array.isArray(record.error)
+      ? (() => {
+          const e = record.error as Record<string, unknown>;
+          const name = typeof e.name === 'string' ? e.name : 'Error';
+          const message = typeof e.message === 'string' ? redactSecrets(e.message) : '';
+          const stack = typeof e.stack === 'string' ? redactSecrets(e.stack) : undefined;
+          return { name, message, stack };
+        })()
+      : undefined;
+
+    events.push({
+      ts,
+      type,
+      requestId,
+      ok,
+      durationMs,
+      details,
+      error,
+    });
+  }
+
+  return events.slice(-DIAGNOSTICS_MAX_EVENTS);
+}
+
+async function ensureDiagnosticsReady(): Promise<void> {
+  if (!diagnosticsReady) {
+    diagnosticsReady = (async () => {
+      try {
+        const result = await storageLocalGet([DIAGNOSTICS_STORAGE_KEY]);
+        diagnostics = parseDiagnosticsPayload(result[DIAGNOSTICS_STORAGE_KEY]);
+      } catch (err) {
+        debugWarn('[Social Copilot] Failed to load diagnostics:', err);
+      }
+    })();
+  }
+  return diagnosticsReady;
+}
+
+async function maybePersistDiagnostics(force = false): Promise<void> {
+  if (!diagnosticsDirty) return;
+
+  const now = Date.now();
+  if (!force && now - diagnosticsLastPersistAt < DIAGNOSTICS_PERSIST_MIN_INTERVAL_MS) return;
+  if (diagnosticsPersistInFlight) {
+    await diagnosticsPersistInFlight;
+    return;
+  }
+
+  const snapshot = diagnostics.slice(-DIAGNOSTICS_MAX_EVENTS);
+  diagnosticsPersistInFlight = (async () => {
+    diagnosticsDirty = false;
+    diagnosticsLastPersistAt = Date.now();
+    try {
+      await storageLocalSet({ [DIAGNOSTICS_STORAGE_KEY]: snapshot });
+    } catch (err) {
+      diagnosticsDirty = true;
+      debugWarn('[Social Copilot] Failed to persist diagnostics:', err);
+    } finally {
+      diagnosticsPersistInFlight = null;
+    }
+  })();
+
+  await diagnosticsPersistInFlight;
+}
+
+async function clearPersistedDiagnostics(): Promise<void> {
+  const inFlight = diagnosticsPersistInFlight;
+  if (inFlight) {
+    try {
+      await inFlight;
+    } catch {
+      // ignore
+    }
+  }
+  diagnostics = [];
+  diagnosticsDirty = false;
+  diagnosticsLastPersistAt = Date.now();
+  diagnosticsPersistInFlight = null;
+  try {
+    await storageLocalRemove([DIAGNOSTICS_STORAGE_KEY]);
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to clear persisted diagnostics:', err);
+  }
+}
+
+function setupBackgroundErrorReporting(): void {
+  const report = (error: unknown, details: Record<string, unknown>) => {
+    void ensureDiagnosticsReady()
+      .then(() => {
+        pushDiagnostic({
+          ts: Date.now(),
+          type: 'BACKGROUND_ERROR',
+          requestId: generateRequestId(),
+          ok: false,
+          details,
+          error: sanitizeErrorForDiagnostics(error),
+        });
+        void maybePersistDiagnostics(true);
+      })
+      .catch(() => {
+        // ignore
+      });
+  };
+
+  self.addEventListener('error', (event) => {
+    const errEvent = event as ErrorEvent;
+    report(errEvent.error ?? errEvent.message, {
+      phase: 'background_error',
+      filename: errEvent.filename,
+      lineno: errEvent.lineno,
+      colno: errEvent.colno,
+    });
+  });
+
+  self.addEventListener('unhandledrejection', (event) => {
+    const rejEvent = event as PromiseRejectionEvent;
+    report(rejEvent.reason, {
+      phase: 'unhandledrejection',
+    });
+  });
+}
+
+function sanitizeErrorForDiagnostics(error: unknown): { name: string; message: string; stack?: string } {
+  const err = error instanceof Error ? error : new Error(String(error));
+  return {
+    name: err.name,
+    message: redactSecrets(err.message),
+    stack: err.stack ? redactSecrets(err.stack) : undefined,
+  };
+}
+
+function sanitizeConfig(config: Config | null): Record<string, unknown> {
+  if (!config) return { configured: false };
+  return {
+    configured: true,
+    provider: config.provider,
+    model: config.model,
+    allowInsecureHttp: config.allowInsecureHttp ?? false,
+    allowPrivateHosts: config.allowPrivateHosts ?? false,
+    styles: config.styles,
+    language: config.language ?? 'auto',
+    autoTrigger: config.autoTrigger ?? true,
+    autoInGroups: config.autoInGroups ?? false,
+    autoAgent: config.autoAgent ?? false,
+    enableFallback: config.enableFallback ?? false,
+    fallbackProvider: config.fallbackProvider,
+    fallbackModel: config.fallbackModel,
+    fallbackAllowInsecureHttp: config.fallbackAllowInsecureHttp ?? false,
+    fallbackAllowPrivateHosts: config.fallbackAllowPrivateHosts ?? false,
+    suggestionCount: normalizeSuggestionCount(config.suggestionCount),
+    cacheStrategy: normalizeCacheStrategy(config.cacheStrategy),
+    enableMemory: config.enableMemory ?? false,
+    persistApiKey: config.persistApiKey ?? false,
+    privacyAcknowledged: config.privacyAcknowledged ?? false,
+    privacy: {
+      redactPii: config.redactPii ?? true,
+      anonymizeSenders: config.anonymizeSenders ?? true,
+      contextMessageLimit: config.contextMessageLimit,
+      maxCharsPerMessage: config.maxCharsPerMessage,
+      maxTotalChars: config.maxTotalChars,
+    },
+    prompts: {
+      hasCustomSystemPrompt: Boolean(config.customSystemPrompt?.trim()),
+      hasCustomUserPrompt: Boolean(config.customUserPrompt?.trim()),
+      customSystemPromptLength: (config.customSystemPrompt ?? '').length,
+      customUserPromptLength: (config.customUserPrompt ?? '').length,
+    },
+    hasApiKey: Boolean(config.apiKey?.trim()),
+    hasFallbackApiKey: Boolean(config.fallbackApiKey?.trim()),
+  };
+}
+
+function normalizeCacheStrategy(value: unknown): CacheStrategy {
+  return value === 'off' || value === 'auto' || value === 'always' ? value : 'auto';
+}
+
+function normalizeModel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeBaseUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeLanguage(value: unknown): 'zh' | 'en' | 'auto' {
+  return value === 'zh' || value === 'en' || value === 'auto' ? value : 'auto';
+}
+
+function normalizeOptionalInt(value: unknown, opts: { min: number; max: number }): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const n = typeof value === 'string' ? Number(value.trim()) : typeof value === 'number' ? value : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const i = Math.floor(n);
+  if (i < opts.min || i > opts.max) return undefined;
+  return i;
+}
+
+function buildOutboundPrivacyOptions(config: Config | null) {
+  return {
+    maxRecentMessages: normalizeOptionalInt(config?.contextMessageLimit, { min: 1, max: 50 }) ?? 10,
+    maxCharsPerMessage: normalizeOptionalInt(config?.maxCharsPerMessage, { min: 50, max: 4000 }) ?? 500,
+    maxTotalChars: normalizeOptionalInt(config?.maxTotalChars, { min: 200, max: 20_000 }) ?? 4000,
+    redactPii: config?.redactPii ?? true,
+    anonymizeSenderNames: config?.anonymizeSenders ?? true,
+  } as const;
+}
+
+function buildSanitizedOutboundContext(
+  contactKey: ContactKey,
+  recentMessages: Message[],
+  currentMessage: Message
+): ConversationContext {
+  const dedupedRecent = recentMessages.filter((m) => m.id !== currentMessage.id);
+  return sanitizeOutboundContext(
+    {
+      contactKey,
+      recentMessages: dedupedRecent,
+      currentMessage,
+    },
+    buildOutboundPrivacyOptions(currentConfig)
+  );
+}
+
+function countRegexMatches(text: string, re: RegExp): number {
+  const matches = text.match(re);
+  return matches ? matches.length : 0;
+}
+
+function resolveLanguage(
+  configured: 'zh' | 'en' | 'auto' | undefined,
+  currentMessage: Message,
+  recentMessages: Message[]
+): 'zh' | 'en' {
+  const lang = normalizeLanguage(configured);
+  if (lang !== 'auto') return lang;
+
+  // Prefer the other party's recent messages to avoid "my last message was in EN but they replied in ZH" cases.
+  // Use current incoming message as the strongest signal when available.
+  const incoming = [
+    ...(currentMessage.direction === 'incoming' ? [currentMessage] : []),
+    ...recentMessages.filter((m) => m.direction === 'incoming').slice(-10),
+  ];
+
+  const sampleSource = incoming.length ? incoming : [currentMessage, ...recentMessages.slice(-10)];
+  const sample = sampleSource.map((m) => m.text).join('\n');
+  const cjk = countRegexMatches(sample, /[\u4e00-\u9fff]/g);
+  const latin = countRegexMatches(sample, /[A-Za-z]/g);
+
+  if (cjk === 0 && latin === 0) return 'zh';
+  return cjk >= latin ? 'zh' : 'en';
+}
+
+function getContactKeyStrCandidates(contactKey: ContactKey): string[] {
+  const variants: ContactKey[] = [contactKey];
+
+  // Backward-compat: older versions may not include accountId in keys.
+  if (contactKey.accountId) {
+    variants.push({ ...contactKey, accountId: undefined });
+  }
+
+  // Backward-compat: some adapters historically used peerId/displayName as conversationId (not stable).
+  // Scope this heuristic to WhatsApp to avoid accidental cross-channel matches on other platforms.
+  if (contactKey.app === 'whatsapp' && contactKey.peerId && contactKey.conversationId !== contactKey.peerId) {
+    variants.push({ ...contactKey, conversationId: contactKey.peerId });
+    if (contactKey.accountId) {
+      variants.push({ ...contactKey, accountId: undefined, conversationId: contactKey.peerId });
+    }
+  }
+
+  const keys = variants.flatMap((key) => [
+    contactKeyToString(key),
+    contactKeyToStringV1(key),
+    legacyContactKeyToString(key),
+  ]);
+
+  return Array.from(new Set(keys));
+}
+
+function getProviderDefaultModel(provider: ProviderType): string {
+  switch (provider) {
+    case 'openai':
+      return 'gpt-5.2-chat-latest';
+    case 'nvidia':
+      return 'z-ai/glm4.7';
+    case 'claude':
+      return 'claude-sonnet-4-5';
+    case 'builtin':
+      return BUILTIN_MODEL;
+    case 'deepseek':
+    default:
+      return 'deepseek-v3.2';
+  }
+}
+
+async function setSessionKeys(apiKey: string, fallbackApiKey?: string): Promise<void> {
+  const payload: Record<string, unknown> = { apiKey };
+  if (fallbackApiKey) payload.fallbackApiKey = fallbackApiKey;
+  const writtenToSession = await storageSessionSet(payload);
+  if (writtenToSession) {
+    if (!fallbackApiKey) {
+      await storageSessionRemove(['fallbackApiKey']);
+    }
+    return;
+  }
+
+  // Fallback: store session keys in local storage and clear them on browser startup.
+  const localPayload: Record<string, unknown> = {
+    [SESSION_API_KEY_FALLBACK_STORAGE_KEY]: apiKey,
+    [SESSION_KEYS_FALLBACK_TIMESTAMP_KEY]: Date.now(),
+  };
+  if (fallbackApiKey) localPayload[SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY] = fallbackApiKey;
+  await storageLocalSet(localPayload);
+  if (!fallbackApiKey) {
+    await storageLocalRemove([SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY]);
+  }
+}
+
+async function getSessionKeys(): Promise<{ apiKey?: string; fallbackApiKey?: string }> {
+  const result = await storageSessionGet(['apiKey', 'fallbackApiKey']);
+  if (result) {
+    return {
+      apiKey: typeof result.apiKey === 'string' ? (result.apiKey as string) : undefined,
+      fallbackApiKey: typeof result.fallbackApiKey === 'string' ? (result.fallbackApiKey as string) : undefined,
+    };
+  }
+
+  const local = await storageLocalGet([
+    SESSION_API_KEY_FALLBACK_STORAGE_KEY,
+    SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY,
+    SESSION_KEYS_FALLBACK_TIMESTAMP_KEY,
+  ]);
+
+  const storedAt = typeof local[SESSION_KEYS_FALLBACK_TIMESTAMP_KEY] === 'number'
+    ? (local[SESSION_KEYS_FALLBACK_TIMESTAMP_KEY] as number)
+    : undefined;
+  if (!storedAt || Date.now() - storedAt > SESSION_KEYS_FALLBACK_TTL_MS) {
+    await storageLocalRemove([
+      SESSION_API_KEY_FALLBACK_STORAGE_KEY,
+      SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY,
+      SESSION_KEYS_FALLBACK_TIMESTAMP_KEY,
+    ]);
+    return {};
+  }
+
+  const apiKey = typeof local[SESSION_API_KEY_FALLBACK_STORAGE_KEY] === 'string'
+    ? (local[SESSION_API_KEY_FALLBACK_STORAGE_KEY] as string)
+    : undefined;
+  const fallbackApiKey = typeof local[SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY] === 'string'
+    ? (local[SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY] as string)
+    : undefined;
+
+  if (apiKey || fallbackApiKey) {
+    try {
+      await storageLocalSet({ [SESSION_KEYS_FALLBACK_TIMESTAMP_KEY]: Date.now() });
+    } catch {
+      // best-effort: avoid failing config load due to storage issues
+    }
+  }
+
+  return { apiKey, fallbackApiKey };
+}
+
+async function clearSessionKeys(): Promise<void> {
+  await storageSessionRemove(['apiKey', 'fallbackApiKey']);
+  await storageLocalRemove([
+    SESSION_API_KEY_FALLBACK_STORAGE_KEY,
+    SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY,
+    SESSION_KEYS_FALLBACK_TIMESTAMP_KEY,
+  ]);
+}
+
+async function clearApiKeys(target: 'primary' | 'fallback' | 'both' = 'both') {
+  const clearPrimary = target === 'primary' || target === 'both';
+  const clearFallback = target === 'fallback' || target === 'both';
+
+  const sessionKeys: string[] = [];
+  if (clearPrimary) sessionKeys.push('apiKey');
+  if (clearFallback) sessionKeys.push('fallbackApiKey');
+  if (sessionKeys.length) {
+    try {
+      await storageSessionRemove(sessionKeys);
+    } catch (err) {
+      debugWarn('[Social Copilot] Failed to clear session API keys:', sanitizeErrorForDiagnostics(err));
+    }
+  }
+
+  const localKeys = new Set<string>();
+  if (clearPrimary) {
+    localKeys.add('apiKey');
+    localKeys.add(SESSION_API_KEY_FALLBACK_STORAGE_KEY);
+  }
+  if (clearFallback) {
+    localKeys.add('fallbackApiKey');
+    localKeys.add(SESSION_FALLBACK_API_KEY_FALLBACK_STORAGE_KEY);
+  }
+  if (clearPrimary && clearFallback) {
+    localKeys.add(SESSION_KEYS_FALLBACK_TIMESTAMP_KEY);
+  }
+  if (localKeys.size) {
+    try {
+      await storageLocalRemove(Array.from(localKeys));
+    } catch (err) {
+      debugWarn('[Social Copilot] Failed to clear local API keys:', sanitizeErrorForDiagnostics(err));
+    }
+  }
+
+  if (clearFallback) {
+    try {
+      await storageLocalSet({ enableFallback: false });
+    } catch (err) {
+      debugWarn('[Social Copilot] Failed to disable fallback after clearing key:', sanitizeErrorForDiagnostics(err));
+    }
+  }
+
+  if (currentConfig) {
+    currentConfig = {
+      ...currentConfig,
+      apiKey: clearPrimary ? '' : currentConfig.apiKey,
+      fallbackApiKey: clearFallback ? undefined : currentConfig.fallbackApiKey,
+      enableFallback: clearFallback ? false : currentConfig.enableFallback,
+    };
+  }
+
+  llmManager = null;
+  profileUpdater = null;
+  fallbackModeActive = false;
+
+  return { success: true, cleared: { primary: clearPrimary, fallback: clearFallback } };
+}
+
+async function buildDiagnosticsSnapshot(): Promise<Record<string, unknown>> {
+  const remoteSelectors = await getRemoteSelectorsDiagnostics();
+  return {
+    version: runtimeGetManifestVersion(),
+    debugEnabled,
+    maxEvents: DIAGNOSTICS_MAX_EVENTS,
+    eventCount: diagnostics.length,
+    events: diagnostics,
+    storeOk: storeInitError === null,
+    storeError: storeInitError
+      ? { name: storeInitError.name, message: redactSecrets(storeInitError.message) }
+      : undefined,
+    config: sanitizeConfig(currentConfig),
+    remoteSelectors,
+  };
+}
+
+async function loadDebugEnabled(): Promise<void> {
+  try {
+    const result = await storageLocalGet(DEBUG_ENABLED_STORAGE_KEY);
+    debugEnabled = Boolean(result[DEBUG_ENABLED_STORAGE_KEY]);
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to load debug flag:', err);
+  }
+}
+
+async function loadProfileUpdateCounts(): Promise<void> {
+  try {
+    const result = await storageLocalGet(PROFILE_UPDATE_COUNT_STORAGE_KEY);
+    const stored = result[PROFILE_UPDATE_COUNT_STORAGE_KEY] as Record<string, unknown> | undefined;
+    if (stored && typeof stored === 'object') {
+      for (const [key, value] of Object.entries(stored)) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          const normalizedKey = normalizeContactKeyStr(key);
+          const prev = lastProfileUpdateCount.get(normalizedKey);
+          if (prev === undefined || value > prev) {
+            lastProfileUpdateCount.set(normalizedKey, value);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to load profile update counts:', err);
+  }
+}
+
+async function persistProfileUpdateCounts(): Promise<void> {
+  const payload: Record<string, number> = {};
+  for (const [key, value] of lastProfileUpdateCount.entries()) {
+    payload[key] = value;
+  }
+  await storageLocalSet({ [PROFILE_UPDATE_COUNT_STORAGE_KEY]: payload });
+}
+
+async function setLastProfileUpdateCount(contactKeyStr: string, count: number): Promise<void> {
+  lastProfileUpdateCount.set(contactKeyStr, count);
+  try {
+    await persistProfileUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist profile update counts:', err);
+  }
+}
+
+async function loadMemoryUpdateCounts(): Promise<void> {
+  try {
+    const result = await storageLocalGet(MEMORY_UPDATE_COUNT_STORAGE_KEY);
+    const stored = result[MEMORY_UPDATE_COUNT_STORAGE_KEY] as Record<string, unknown> | undefined;
+    if (stored && typeof stored === 'object') {
+      for (const [key, value] of Object.entries(stored)) {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          const normalizedKey = normalizeContactKeyStr(key);
+          const prev = lastMemoryUpdateCount.get(normalizedKey);
+          if (prev === undefined || value > prev) {
+            lastMemoryUpdateCount.set(normalizedKey, value);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to load memory update counts:', err);
+  }
+}
+
+async function persistMemoryUpdateCounts(): Promise<void> {
+  const payload: Record<string, number> = {};
+  for (const [key, value] of lastMemoryUpdateCount.entries()) {
+    payload[key] = value;
+  }
+  await storageLocalSet({ [MEMORY_UPDATE_COUNT_STORAGE_KEY]: payload });
+}
+
+async function setLastMemoryUpdateCount(contactKeyStr: string, count: number): Promise<void> {
+  lastMemoryUpdateCount.set(contactKeyStr, count);
+  try {
+    await persistMemoryUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist memory update counts:', err);
+  }
+}
+
+function ensureStoreReady(): Promise<void> {
+  if (!storeReady) {
+    storeReady = (async () => {
+      try {
+        await store.init();
+        preferenceManager = new StylePreferenceManager(store);
+        await loadProfileUpdateCounts();
+        await loadMemoryUpdateCounts();
+        await loadDebugEnabled();
+        storeInitError = null;
+      } catch (err) {
+        storeInitError = err instanceof Error ? err : new Error(String(err));
+        throw storeInitError;
+      }
+    })().catch((err) => {
+      storeReady = null;
+      throw err;
+    });
+  }
+  return storeReady;
+}
+
+// 初始化
+addRuntimeOnInstalledListener(async () => {
+  debugLog('[Social Copilot] Extension installed');
+  await ensureStoreReady();
+  await loadConfig();
+});
+
+addRuntimeOnStartupListener(() => {
+  // Ensure session-only keys do not survive browser restarts (fallback path stores them in local).
+  void clearSessionKeys();
+});
+
+// 启动时初始化
+ensureStoreReady()
+  .catch((err) => debugError('[Social Copilot] Init failed:', sanitizeErrorForDiagnostics(err)));
+void ensureDiagnosticsReady();
+setupBackgroundErrorReporting();
+
+// 监听消息
+addRuntimeOnMessageListener((request, sender, sendResponse) => {
+  const runtimeId = runtimeGetId();
+  const senderId =
+    sender && typeof sender === 'object' && 'id' in (sender as Record<string, unknown>)
+      ? (sender as Record<string, unknown>).id
+      : undefined;
+
+  // Reject cross-extension messages (prevents other installed extensions from invoking privileged handlers).
+  if (runtimeId && typeof senderId === 'string' && senderId !== runtimeId) {
+    sendResponse({ error: 'Unauthorized message sender' });
+    return false;
+  }
+
+  const requestType = request && typeof request === 'object' && typeof (request as Record<string, unknown>).type === 'string'
+    ? ((request as Record<string, unknown>).type as string)
+    : 'UNKNOWN';
+  const senderContext = classifyMessageSender(sender);
+  if (!isMessageTypeAllowedForSender(requestType, senderContext)) {
+    sendResponse({ error: 'Unauthorized message sender' });
+    return false;
+  }
+
+  handleMessage(request as { type: string; [key: string]: unknown })
+    .then(sendResponse)
+    .catch((error) => {
+      debugError('[Social Copilot] Error:', sanitizeErrorForDiagnostics(error));
+      sendResponse({ error: toUserErrorMessage(error) });
+    });
+  return true;
+});
+
+function sanitizeMessageForLocalStore(message: Message, includeText: boolean): Message {
+  const senderName = message.direction === 'incoming' ? '对方' : '我';
+  const base: Message = { ...message, senderName, raw: undefined };
+
+  if (!includeText) {
+    return { ...base, text: '' };
+  }
+
+  const rawText = typeof message.text === 'string' ? message.text : String(message.text ?? '');
+  const text = redactPii(rawText).slice(0, 500);
+  return { ...base, text };
+}
+
+async function handleMessage(request: { type: string; [key: string]: unknown }) {
+  await ensureDiagnosticsReady();
+  const requestType = typeof request.type === 'string' ? request.type : 'UNKNOWN';
+  const allowWithoutStore = new Set([
+    'GET_STATUS',
+    'CLEAR_DATA',
+    'GET_DIAGNOSTICS',
+    'GET_DIAGNOSTICS_JSON',
+    'CLEAR_DIAGNOSTICS',
+    'SET_DEBUG_ENABLED',
+    'REPORT_ADAPTER_HEALTH',
+    'REPORT_CONTENT_SCRIPT_ERROR',
+    'REPORT_AUTO_COOLDOWN',
+    'REPORT_AUTO_AGENT',
+    'CLEAR_API_KEYS',
+    'CANCEL_REQUEST',
+  ]);
+
+  if (allowWithoutStore.has(requestType)) {
+    try {
+      await ensureStoreReady();
+    } catch {
+      // Allow limited recovery/diagnostics even if IndexedDB init/migration fails.
+      // This ensures the extension can still export diagnostics and offer a self-healing
+      // "clear data" path instead of getting permanently bricked by a migration failure.
+    }
+  } else {
+    await ensureStoreReady();
+  }
+
+  const requestId = typeof request.requestId === 'string' && request.requestId.trim()
+    ? request.requestId.trim()
+    : generateRequestId();
+  const startedAt = Date.now();
+  const diagType = normalizeDiagnosticType(request.type);
+
+  const record = (event: Omit<DiagnosticEvent, 'requestId'>) => {
+    const safeEvent: Omit<DiagnosticEvent, 'requestId'> = {
+      ...event,
+      details: sanitizeDiagnosticDetails(event.details),
+    };
+    pushDiagnostic({ ...safeEvent, requestId });
+    if (debugEnabled) {
+      const label = event.ok ? 'ok' : 'err';
+      debugLog(`[Social Copilot][diag][${label}]`, event.type, requestId, safeEvent.details ?? safeEvent.error ?? {});
+    }
+  };
+
+  try {
+    const result = await dispatchMessage(requestId, request);
+    if (
+      diagType !== 'ADAPTER_HEALTH' &&
+      diagType !== 'CONTENT_SCRIPT_ERROR' &&
+      diagType !== 'AUTO_COOLDOWN' &&
+      diagType !== 'AUTO_AGENT' &&
+      diagType !== 'CLEAR_DIAGNOSTICS' &&
+      diagType !== 'CANCEL_REQUEST' &&
+      diagType !== 'CLEAR_DATA'
+    ) {
+      record({
+        ts: Date.now(),
+        type: diagType,
+        ok: true,
+        durationMs: Date.now() - startedAt,
+        details: debugEnabled ? buildSuccessDetails(request, result) : buildMinimalSuccessDetails(request, result),
+      });
+    }
+    await maybePersistDiagnostics();
+    return result;
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    const safeErr = sanitizeErrorForDiagnostics(err);
+    if (
+      diagType !== 'ADAPTER_HEALTH' &&
+      diagType !== 'CONTENT_SCRIPT_ERROR' &&
+      diagType !== 'AUTO_COOLDOWN' &&
+      diagType !== 'AUTO_AGENT' &&
+      diagType !== 'CLEAR_DIAGNOSTICS' &&
+      diagType !== 'CANCEL_REQUEST' &&
+      diagType !== 'CLEAR_DATA'
+    ) {
+      record({
+        ts: Date.now(),
+        type: diagType,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        details: debugEnabled ? buildErrorDetails(request, err) : buildMinimalErrorDetails(request, err),
+        error: safeErr,
+      });
+    }
+    await maybePersistDiagnostics();
+    throw err;
+  }
+}
+
+type StoredConfigRecord = Record<string, unknown> &
+  Partial<{
+    apiKey: string;
+    advancedMode: boolean;
+    provider: ProviderType;
+    baseUrl: string;
+    allowInsecureHttp: boolean;
+    allowPrivateHosts: boolean;
+    model: string;
+    styles: ReplyStyle[];
+    language: 'zh' | 'en' | 'auto';
+    autoTrigger: boolean;
+    autoInGroups: boolean;
+    autoAgent: boolean;
+    customSystemPrompt: string;
+    customUserPrompt: string;
+    privacyAcknowledged: boolean;
+    redactPii: boolean;
+    anonymizeSenders: boolean;
+    contextMessageLimit: number | string;
+    maxCharsPerMessage: number | string;
+    maxTotalChars: number | string;
+    temperature: number | string;
+    fallbackProvider: ProviderType;
+    fallbackBaseUrl: string;
+    fallbackAllowInsecureHttp: boolean;
+    fallbackAllowPrivateHosts: boolean;
+    fallbackModel: string;
+    fallbackApiKey: string;
+    enableFallback: boolean;
+    suggestionCount: number;
+    cacheStrategy: CacheStrategy;
+    persistApiKey: boolean;
+    enableMemory: boolean;
+  }>;
+
+function normalizeDiagnosticType(type: string): DiagnosticEventType {
+  switch (type) {
+    case 'GENERATE_REPLY':
+    case 'ANALYZE_THOUGHT':
+    case 'SET_CONFIG':
+    case 'TEST_CONNECTION':
+    case 'ACK_PRIVACY':
+    case 'GET_STATUS':
+    case 'GET_PROFILE':
+    case 'UPDATE_PROFILE':
+    case 'GET_CONTACT_MEMORY':
+    case 'CLEAR_CONTACT_MEMORY':
+    case 'RECORD_STYLE_SELECTION':
+    case 'GET_STYLE_PREFERENCE':
+    case 'RESET_STYLE_PREFERENCE':
+    case 'RESET_THOUGHT_PREFERENCE':
+    case 'EXPORT_PREFERENCES':
+    case 'EXPORT_USER_DATA':
+    case 'EXPORT_USER_DATA_JSON':
+    case 'IMPORT_USER_DATA':
+    case 'GET_CONTACTS':
+    case 'GET_CONTACTS_WITH_PREFS':
+    case 'CLEAR_DATA':
+    case 'CLEAR_CONTACT_DATA':
+    case 'CLEAR_API_KEYS':
+    case 'SET_DEBUG_ENABLED':
+    case 'GET_DIAGNOSTICS':
+    case 'GET_DIAGNOSTICS_JSON':
+    case 'CLEAR_DIAGNOSTICS':
+    case 'CANCEL_REQUEST':
+      return type;
+    case 'REPORT_ADAPTER_HEALTH':
+      return 'ADAPTER_HEALTH';
+    case 'REPORT_CONTENT_SCRIPT_ERROR':
+      return 'CONTENT_SCRIPT_ERROR';
+    case 'REPORT_AUTO_COOLDOWN':
+      return 'AUTO_COOLDOWN';
+    case 'REPORT_AUTO_AGENT':
+      return 'AUTO_AGENT';
+    case 'SET_PREFERRED_STYLE':
+    case 'SET_API_KEY':
+      // Normalize legacy aliases
+      return 'SET_CONFIG';
+    default:
+      return 'UNKNOWN';
+  }
+}
+
+function buildMinimalSuccessDetails(
+  request: { type: string; [key: string]: unknown },
+  result: unknown
+): Record<string, unknown> {
+  if (request.type === 'GENERATE_REPLY') {
+    const payload = request.payload as Record<string, unknown> | undefined;
+    const source = payload?.source === 'auto' || payload?.source === 'manual' ? payload.source : undefined;
+    const r = result as {
+      provider?: string;
+      usingFallback?: boolean;
+      latency?: number;
+      candidates?: unknown[];
+      error?: string;
+      errorCategory?: string;
+    };
+    return {
+      provider: r.provider,
+      usingFallback: r.usingFallback,
+      latency: r.latency,
+      candidateCount: Array.isArray(r.candidates) ? r.candidates.length : undefined,
+      hasError: Boolean(r.error),
+      errorCategory: r.errorCategory,
+      errorCode: r.errorCategory,
+      retriable: r.errorCategory ? isRetriableGenerateReplyCategory(r.errorCategory) : undefined,
+      source,
+    };
+  }
+  if (request.type === 'SET_CONFIG') {
+    return { config: sanitizeConfig(currentConfig) };
+  }
+  if (request.type === 'GET_STATUS') {
+    const r = result as { hasApiKey?: boolean; activeProvider?: string; activeModel?: string; usingFallback?: boolean; hasFallback?: boolean };
+    return {
+      hasApiKey: r.hasApiKey,
+      activeProvider: r.activeProvider,
+      activeModel: r.activeModel,
+      usingFallback: r.usingFallback,
+      hasFallback: r.hasFallback,
+    };
+  }
+  if (request.type === 'TEST_CONNECTION') {
+    const r = result as { primary?: { ok?: boolean; provider?: string }; fallback?: { ok?: boolean; provider?: string } };
+    return {
+      primaryOk: r.primary?.ok,
+      primaryProvider: r.primary?.provider,
+      fallbackOk: r.fallback?.ok,
+      fallbackProvider: r.fallback?.provider,
+    };
+  }
+  return {};
+}
+
+function buildSuccessDetails(
+  request: { type: string; [key: string]: unknown },
+  result: unknown
+): Record<string, unknown> {
+  if (request.type === 'GENERATE_REPLY') {
+    const payload = request.payload as Record<string, unknown> | undefined;
+    const messages = Array.isArray(payload?.messages) ? payload.messages as unknown[] : undefined;
+    const contactKeyParsed = ContactKeySchema.safeParse(payload?.contactKey);
+    const source = payload?.source === 'auto' || payload?.source === 'manual' ? payload.source : undefined;
+    const lastMessage = messages && messages.length > 0
+      ? (messages[messages.length - 1] as Record<string, unknown> | undefined)
+      : undefined;
+    const r = result as {
+      provider?: string;
+      usingFallback?: boolean;
+      latency?: number;
+      candidates?: Array<{ style?: string; text?: string }>;
+      error?: string;
+      errorCategory?: string;
+      model?: string;
+    };
+    return {
+      provider: r.provider,
+      model: r.model,
+      usingFallback: r.usingFallback,
+      latency: r.latency,
+      candidateCount: Array.isArray(r.candidates) ? r.candidates.length : undefined,
+      candidateStyles: Array.isArray(r.candidates)
+        ? r.candidates.map((c) => c.style)
+        : undefined,
+      candidateLengths: Array.isArray(r.candidates)
+        ? r.candidates.map((c) => (typeof c.text === 'string' ? c.text.length : 0))
+        : undefined,
+      hasError: Boolean(r.error),
+      errorCategory: r.errorCategory,
+      errorCode: r.errorCategory,
+      retriable: r.errorCategory ? isRetriableGenerateReplyCategory(r.errorCategory) : undefined,
+      thoughtDirection: payload?.thoughtDirection,
+      source,
+      contactKeySummary: contactKeyParsed.success ? summarizeContactKeyForDiagnostics(contactKeyParsed.data) : undefined,
+      messageCount: messages?.length,
+      lastMessageLen: typeof lastMessage?.text === 'string' ? lastMessage.text.length : undefined,
+    };
+  }
+  if (request.type === 'ANALYZE_THOUGHT') {
+    const r = result as { result?: { tone?: unknown; toneSummary?: unknown; confidence?: unknown }; cards?: unknown[]; tone?: unknown };
+    return {
+      hasResult: Boolean(r.result),
+      cardCount: Array.isArray(r.cards) ? r.cards.length : undefined,
+      tone: r.result?.tone ?? r.tone,
+      hasToneSummary: typeof r.result?.toneSummary === 'string' && r.result.toneSummary.length > 0,
+      confidence: typeof r.result?.confidence === 'number' ? r.result.confidence : undefined,
+    };
+  }
+  if (request.type === 'SET_CONFIG') {
+    return { config: sanitizeConfig(currentConfig) };
+  }
+  if (request.type === 'GET_DIAGNOSTICS') {
+    const snapshot = result as Record<string, unknown>;
+    return { eventCount: snapshot.eventCount, maxEvents: snapshot.maxEvents, debugEnabled: snapshot.debugEnabled };
+  }
+  return buildMinimalSuccessDetails(request, result);
+}
+
+function buildMinimalErrorDetails(
+  request: { type: string; [key: string]: unknown },
+  error?: unknown
+): Record<string, unknown> {
+  if (request.type === 'GENERATE_REPLY') {
+    const errorCategory = error ? classifyGenerateReplyError(error) : undefined;
+    const payload = request.payload as Record<string, unknown> | undefined;
+    const source = payload?.source === 'auto' || payload?.source === 'manual' ? payload.source : undefined;
+    return {
+      provider: llmManager?.getActiveProvider(),
+      config: sanitizeConfig(currentConfig),
+      errorCategory,
+      errorCode: errorCategory,
+      retriable: isRetriableGenerateReplyCategory(errorCategory),
+      source,
+    };
+  }
+  return {};
+}
+
+function buildErrorDetails(
+  request: { type: string; [key: string]: unknown },
+  error?: unknown
+): Record<string, unknown> {
+  if (request.type === 'GENERATE_REPLY') {
+    const payload = request.payload as Record<string, unknown> | undefined;
+    const messages = Array.isArray(payload?.messages) ? payload.messages as unknown[] : undefined;
+    const contactKeyParsed = ContactKeySchema.safeParse(payload?.contactKey);
+    const errorCategory = error ? classifyGenerateReplyError(error) : undefined;
+    const source = payload?.source === 'auto' || payload?.source === 'manual' ? payload.source : undefined;
+    return {
+      provider: llmManager?.getActiveProvider(),
+      config: sanitizeConfig(currentConfig),
+      errorCategory,
+      errorCode: errorCategory,
+      retriable: isRetriableGenerateReplyCategory(errorCategory),
+      source,
+      contactKeySummary: contactKeyParsed.success ? summarizeContactKeyForDiagnostics(contactKeyParsed.data) : undefined,
+      messageCount: messages?.length,
+      messages: Array.isArray(messages)
+        ? messages.map((raw) => {
+            const m = raw as Record<string, unknown>;
+            return {
+              idLen: typeof m.id === 'string' ? m.id.length : undefined,
+              dir: m.direction,
+              senderLen: typeof m.senderName === 'string' ? m.senderName.length : undefined,
+              textLen: typeof m.text === 'string' ? m.text.length : undefined,
+              ts: typeof m.timestamp === 'number' ? m.timestamp : undefined,
+            };
+          })
+        : undefined,
+      thoughtDirection: payload?.thoughtDirection,
+    };
+  }
+  if (request.type === 'SET_CONFIG') {
+    return { nextConfig: sanitizeConfig(request.config as Config), prevConfig: sanitizeConfig(currentConfig) };
+  }
+  return buildMinimalErrorDetails(request, error);
+}
+
+async function dispatchMessage(
+  requestId: string,
+  request: { type: string; [key: string]: unknown }
+) {
+  switch (request.type) {
+    case 'GENERATE_REPLY': {
+      // Validate payload using Zod schema
+      const validationResult = GenerateReplyPayloadSchema.safeParse(request.payload);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `GENERATE_REPLY 请求参数验证失败：${errorMessage}` };
+      }
+      return handleGenerateReply(validationResult.data, requestId);
+    }
+
+    case 'ANALYZE_THOUGHT': {
+      // Validate payload using Zod schema
+      const validationResult = AnalyzeThoughtPayloadSchema.safeParse(request.payload);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `ANALYZE_THOUGHT 请求参数验证失败：${errorMessage}` };
+      }
+      return handleAnalyzeThought(validationResult.data);
+    }
+
+    case 'SET_API_KEY':
+      // 兼容旧版本
+      return setConfig({
+        apiKey: request.apiKey as string,
+        provider: 'deepseek',
+        styles: DEFAULT_STYLES,
+      });
+
+    case 'TEST_CONNECTION': {
+      const validationResult = ConfigSchema.safeParse(request.config);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `TEST_CONNECTION 配置验证失败：${errorMessage}` };
+      }
+
+      const config = applyReleaseRestrictions(validationResult.data as Config);
+      const testInput: LLMInput = {
+        context: {
+          contactKey: {
+            platform: 'web',
+            app: 'other',
+            conversationId: 'test-connection',
+            peerId: 'test-peer',
+            isGroup: false,
+          },
+          recentMessages: [],
+          currentMessage: {
+            id: 'test-message',
+            contactKey: {
+              platform: 'web',
+              app: 'other',
+              conversationId: 'test-connection',
+              peerId: 'test-peer',
+              isGroup: false,
+            },
+            direction: 'incoming',
+            senderName: 'Test',
+            text: 'ping',
+            timestamp: Date.now(),
+          },
+        },
+        styles: sanitizeStyles(config.styles),
+        language: normalizeLanguage(config.language),
+        temperature: 0,
+        maxLength: 16,
+        task: 'reply',
+      };
+
+      const runOne = async (cfg: LLMManagerConfig['primary']) => {
+        const startedAt = Date.now();
+        const manager = new LLMManager(
+          { primary: cfg, cache: { enabled: false } },
+          {},
+          buildPromptHookRegistry(config)
+        );
+        try {
+          const res = await manager.generateReply(testInput);
+          return { ok: true, provider: cfg.provider, model: res.model, latencyMs: Date.now() - startedAt };
+        } catch (err) {
+          return { ok: false, provider: cfg.provider, error: redactSecrets((err as Error).message), latencyMs: Date.now() - startedAt };
+        }
+      };
+
+      const inferredAdvancedMode = config.advancedMode ?? (config.provider !== 'builtin');
+      const isBuiltin = !inferredAdvancedMode || config.provider === 'builtin';
+      const primary = await runOne({
+        provider: isBuiltin ? 'builtin' : config.provider,
+        apiKey: config.apiKey,
+        model: isBuiltin ? BUILTIN_MODEL : normalizeModel(config.model),
+        baseUrl: isBuiltin ? undefined : normalizeBaseUrl(config.baseUrl),
+        allowInsecureHttp: config.allowInsecureHttp ?? false,
+        allowPrivateHosts: config.allowPrivateHosts ?? false,
+      });
+
+      const fallbackEnabled = (config.enableFallback ?? false) && Boolean((config.fallbackApiKey ?? '').trim());
+      const fallback = fallbackEnabled
+        ? await runOne({
+            provider: (config.fallbackProvider || config.provider) as ProviderType,
+            apiKey: (config.fallbackApiKey as string) || '',
+            model: normalizeModel(config.fallbackModel),
+            baseUrl: normalizeBaseUrl(config.fallbackBaseUrl),
+            allowInsecureHttp: config.fallbackAllowInsecureHttp ?? false,
+            allowPrivateHosts: config.fallbackAllowPrivateHosts ?? false,
+          })
+        : undefined;
+
+      return { primary, fallback, requestId };
+    }
+
+    case 'SET_CONFIG': {
+      // Validate config using Zod schema
+      const validationResult = ConfigSchema.safeParse(request.config);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `SET_CONFIG 配置验证失败：${errorMessage}` };
+      }
+      return setConfig(validationResult.data);
+    }
+
+    case 'ACK_PRIVACY': {
+      const acknowledged = true;
+      try {
+        await storageLocalSet({ privacyAcknowledged: acknowledged });
+      } catch {
+        // ignore
+      }
+      if (currentConfig) {
+        currentConfig = { ...currentConfig, privacyAcknowledged: acknowledged };
+      }
+      return { success: true, privacyAcknowledged: acknowledged };
+    }
+
+    case 'SET_DEBUG_ENABLED': {
+      debugEnabled = Boolean(request.enabled);
+      await storageLocalSet({ [DEBUG_ENABLED_STORAGE_KEY]: debugEnabled });
+      return { success: true, debugEnabled };
+    }
+
+    case 'GET_DIAGNOSTICS':
+      return await buildDiagnosticsSnapshot();
+
+    case 'GET_DIAGNOSTICS_JSON': {
+      const pretty = Boolean(request.pretty);
+      const snapshot = await buildDiagnosticsSnapshot();
+      return { json: JSON.stringify(snapshot, null, pretty ? 2 : 0) };
+    }
+
+    case 'CLEAR_DIAGNOSTICS':
+      await clearPersistedDiagnostics();
+      return { success: true };
+
+    case 'CANCEL_REQUEST': {
+      const targetRequestId = typeof request.targetRequestId === 'string' ? request.targetRequestId.trim() : '';
+      if (!targetRequestId) {
+        return { success: false, error: 'Missing targetRequestId' };
+      }
+      const controller = activeGenerateRequests.get(targetRequestId);
+      if (!controller) {
+        return { success: true, cancelled: false };
+      }
+      controller.abort();
+      return { success: true, cancelled: true };
+    }
+
+    case 'GET_STATUS': {
+      if (!llmManager || !currentConfig) {
+        try {
+          await loadConfig();
+        } catch (err) {
+          debugWarn('[Social Copilot] Failed to load config for status:', sanitizeErrorForDiagnostics(err));
+        }
+      }
+      const hasApiKey = !!llmManager;
+      const hasFallback = llmManager?.hasFallback() ?? false;
+      const usingFallback = Boolean(fallbackModeActive && hasFallback);
+
+      const activeModel = currentConfig
+        ? usingFallback
+          ? currentConfig.fallbackModel || getProviderDefaultModel(currentConfig.fallbackProvider || currentConfig.provider)
+          : currentConfig.model || getProviderDefaultModel(currentConfig.provider)
+        : undefined;
+
+      return {
+        hasApiKey,
+        activeProvider: llmManager?.getActiveProvider(),
+        activeModel,
+        usingFallback,
+        hasFallback,
+        debugEnabled,
+        privacyAcknowledged: currentConfig?.privacyAcknowledged ?? false,
+        autoTrigger: currentConfig?.autoTrigger ?? true,
+        storeOk: storeInitError === null,
+        storeError: storeInitError
+          ? { name: storeInitError.name, message: storeInitError.message }
+          : undefined,
+        requestId,
+      };
+    }
+
+    case 'GET_PROFILE':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `GET_PROFILE 请求参数验证失败：${errorMessage}` };
+      }
+      return getProfile(validationResult.data);
+    }
+
+    case 'UPDATE_PROFILE':
+    {
+      const contactKeyResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!contactKeyResult.success) {
+        const errorMessage = formatZodError(contactKeyResult.error);
+        return { error: `UPDATE_PROFILE 请求参数验证失败：${errorMessage}` };
+      }
+
+      const updatesResult = ContactProfileSchema.partial().safeParse(request.updates);
+      if (!updatesResult.success) {
+        const errorMessage = formatZodError(updatesResult.error);
+        return { error: `UPDATE_PROFILE 请求参数验证失败：${errorMessage}` };
+      }
+
+      const safeUpdates = { ...updatesResult.data } as Partial<ContactProfile>;
+      delete safeUpdates.key;
+      delete safeUpdates.createdAt;
+      delete safeUpdates.updatedAt;
+      return updateProfile(contactKeyResult.data, safeUpdates);
+    }
+
+    case 'GET_CONTACT_MEMORY':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `GET_CONTACT_MEMORY 请求参数验证失败：${errorMessage}` };
+      }
+      return getContactMemory(validationResult.data);
+    }
+
+    case 'CLEAR_CONTACT_MEMORY':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `CLEAR_CONTACT_MEMORY 请求参数验证失败：${errorMessage}` };
+      }
+      return clearContactMemory(validationResult.data);
+    }
+
+    case 'SET_PREFERRED_STYLE':
+    {
+      const contactKeyResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!contactKeyResult.success) {
+        const errorMessage = formatZodError(contactKeyResult.error);
+        return { error: `SET_PREFERRED_STYLE 请求参数验证失败：${errorMessage}` };
+      }
+      const styleResult = ReplyStyleSchema.safeParse(request.style);
+      if (!styleResult.success) {
+        const errorMessage = formatZodError(styleResult.error);
+        return { error: `SET_PREFERRED_STYLE 请求参数验证失败：${errorMessage}` };
+      }
+      return recordStyleSelection(contactKeyResult.data, styleResult.data);
+    }
+
+    case 'RECORD_STYLE_SELECTION':
+    {
+      const contactKeyResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!contactKeyResult.success) {
+        const errorMessage = formatZodError(contactKeyResult.error);
+        return { error: `RECORD_STYLE_SELECTION 请求参数验证失败：${errorMessage}` };
+      }
+      const styleResult = ReplyStyleSchema.safeParse(request.style);
+      if (!styleResult.success) {
+        const errorMessage = formatZodError(styleResult.error);
+        return { error: `RECORD_STYLE_SELECTION 请求参数验证失败：${errorMessage}` };
+      }
+      return recordStyleSelection(contactKeyResult.data, styleResult.data);
+    }
+
+    case 'GET_STYLE_PREFERENCE':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `GET_STYLE_PREFERENCE 请求参数验证失败：${errorMessage}` };
+      }
+      return getStylePreference(validationResult.data);
+    }
+
+    case 'RESET_STYLE_PREFERENCE':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `RESET_STYLE_PREFERENCE 请求参数验证失败：${errorMessage}` };
+      }
+      return resetStylePreference(validationResult.data);
+    }
+
+    case 'RESET_THOUGHT_PREFERENCE':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `RESET_THOUGHT_PREFERENCE 请求参数验证失败：${errorMessage}` };
+      }
+      return resetThoughtPreference(validationResult.data);
+    }
+
+    case 'EXPORT_PREFERENCES':
+      return exportPreferences();
+
+    case 'EXPORT_USER_DATA':
+      return exportUserData();
+
+    case 'EXPORT_USER_DATA_JSON': {
+      const pretty = Boolean(request.pretty);
+      const { backup } = await exportUserData();
+      return { json: JSON.stringify(backup, null, pretty ? 2 : 0) };
+    }
+
+    case 'IMPORT_USER_DATA':
+      return importUserData(request.data);
+
+    case 'GET_CONTACTS':
+      return getContacts();
+
+    case 'GET_CONTACTS_WITH_PREFS':
+      return getContactsWithPrefs();
+
+    case 'CLEAR_DATA':
+      return clearData();
+
+    case 'CLEAR_CONTACT_DATA':
+    {
+      const validationResult = ContactKeySchema.safeParse(request.contactKey);
+      if (!validationResult.success) {
+        const errorMessage = formatZodError(validationResult.error);
+        return { error: `CLEAR_CONTACT_DATA 请求参数验证失败：${errorMessage}` };
+      }
+      return clearContactData(validationResult.data);
+    }
+
+    case 'CLEAR_API_KEYS': {
+      const targetRaw = typeof request.target === 'string' ? request.target : 'both';
+      const target = targetRaw === 'primary' || targetRaw === 'fallback' || targetRaw === 'both'
+        ? targetRaw
+        : 'both';
+      return clearApiKeys(target);
+    }
+
+    case 'OPEN_OPTIONS_PAGE': {
+      runtimeOpenOptionsPage();
+      return { success: true };
+    }
+
+    case 'REPORT_ADAPTER_HEALTH': {
+      const payload = request.payload as Record<string, unknown> | undefined;
+      const ok = Boolean(payload?.ok);
+      pushDiagnostic({
+        ts: Date.now(),
+        type: 'ADAPTER_HEALTH',
+        requestId,
+        ok,
+        details: {
+          app: payload?.app,
+          host: payload?.host,
+          pathnameKind: payload?.pathnameKind,
+          pathnameLen: payload?.pathnameLen,
+          adapterVariant: payload?.adapterVariant,
+          adapterSelectorHints: payload?.adapterSelectorHints,
+          hasInput: payload?.hasInput,
+          hasContactKey: payload?.hasContactKey,
+          messageCount: payload?.messageCount,
+          reason: payload?.reason,
+          inputTag: payload?.inputTag,
+          inputContentEditable: payload?.inputContentEditable,
+          inputRole: payload?.inputRole,
+          contactKeySummary: payload?.contactKeySummary,
+          lastMessageSummary: payload?.lastMessageSummary,
+        },
+      });
+      return { success: true };
+    }
+
+    case 'REPORT_CONTENT_SCRIPT_ERROR': {
+      const payload = request.payload as Record<string, unknown> | undefined;
+      const name = typeof payload?.name === 'string' ? payload.name : 'ContentScriptError';
+      const message = typeof payload?.message === 'string' ? redactSecrets(payload.message) : 'unknown';
+      const stack = typeof payload?.stack === 'string' ? redactSecrets(payload.stack) : undefined;
+
+      pushDiagnostic({
+        ts: Date.now(),
+        type: 'CONTENT_SCRIPT_ERROR',
+        requestId,
+        ok: false,
+        details: {
+          app: payload?.app,
+          host: payload?.host,
+          pathnameKind: payload?.pathnameKind,
+          pathnameLen: payload?.pathnameLen,
+          phase: payload?.phase,
+          filename: payload?.filename,
+          lineno: payload?.lineno,
+          colno: payload?.colno,
+        },
+        error: {
+          name,
+          message,
+          stack,
+        },
+      });
+      return { success: true };
+    }
+
+    case 'REPORT_AUTO_COOLDOWN': {
+      const payload = request.payload as Record<string, unknown> | undefined;
+      const active = payload?.active === true;
+      const reason = typeof payload?.reason === 'string' ? payload.reason : 'unknown';
+      const failureCount = typeof payload?.failureCount === 'number' ? payload.failureCount : undefined;
+      const windowMs = typeof payload?.windowMs === 'number' ? payload.windowMs : undefined;
+      const cooldownMs = typeof payload?.cooldownMs === 'number' ? payload.cooldownMs : undefined;
+      const cooldownUntil = typeof payload?.cooldownUntil === 'number' ? payload.cooldownUntil : undefined;
+
+      pushDiagnostic({
+        ts: Date.now(),
+        type: 'AUTO_COOLDOWN',
+        requestId,
+        ok: true,
+        details: {
+          app: payload?.app,
+          host: payload?.host,
+          pathnameKind: payload?.pathnameKind,
+          pathnameLen: payload?.pathnameLen,
+          active,
+          reason,
+          failureCount,
+          windowMs,
+          cooldownMs,
+          cooldownUntil,
+        },
+      });
+      return { success: true };
+    }
+
+    case 'REPORT_AUTO_AGENT': {
+      const payload = request.payload as Record<string, unknown> | undefined;
+      const status = typeof payload?.status === 'string' ? payload.status : 'unknown';
+      const style = typeof payload?.style === 'string' ? payload.style : undefined;
+      const textLen = typeof payload?.textLen === 'number' ? payload.textLen : undefined;
+
+      pushDiagnostic({
+        ts: Date.now(),
+        type: 'AUTO_AGENT',
+        requestId,
+        ok: status === 'sent' || status === 'filled_only',
+        details: {
+          app: payload?.app,
+          host: payload?.host,
+          pathnameKind: payload?.pathnameKind,
+          pathnameLen: payload?.pathnameLen,
+          source: 'autoAgent',
+          status,
+          style,
+          textLen,
+          isGroup: Boolean(payload?.isGroup),
+        },
+      });
+      return { success: true };
+    }
+
+    default:
+      return { error: 'Unknown message type', requestId };
+  }
+}
+
+async function loadConfig() {
+  const result = await storageLocalGet<StoredConfigRecord>([
+    'apiKey',
+    'advancedMode',
+    'provider',
+    'baseUrl',
+    'allowInsecureHttp',
+    'allowPrivateHosts',
+    'model',
+    'styles',
+    'language',
+    'autoTrigger',
+    'autoInGroups',
+    'autoAgent',
+    'customSystemPrompt',
+    'customUserPrompt',
+    'privacyAcknowledged',
+    'redactPii',
+    'anonymizeSenders',
+    'contextMessageLimit',
+    'maxCharsPerMessage',
+    'maxTotalChars',
+    'temperature',
+    'fallbackProvider',
+    'fallbackBaseUrl',
+    'fallbackAllowInsecureHttp',
+    'fallbackAllowPrivateHosts',
+    'fallbackModel',
+    'fallbackApiKey',
+    'enableFallback',
+    'suggestionCount',
+    'cacheStrategy',
+    'persistApiKey',
+    'enableMemory',
+  ]);
+
+  const persistApiKey = result.persistApiKey ?? false;
+  const enableFallback = result.enableFallback ?? false;
+  const enableMemory = result.enableMemory ?? false;
+
+  const keys = persistApiKey
+    ? {
+        apiKey: result.apiKey as string | undefined,
+        fallbackApiKey: result.fallbackApiKey as string | undefined,
+      }
+    : await getSessionKeys();
+
+  if (keys.apiKey) {
+    await setConfig({
+      apiKey: keys.apiKey,
+      advancedMode: typeof result.advancedMode === 'boolean' ? result.advancedMode : undefined,
+      provider: result.provider || 'deepseek',
+      baseUrl: normalizeBaseUrl(result.baseUrl),
+      allowInsecureHttp: result.allowInsecureHttp === true,
+      allowPrivateHosts: result.allowPrivateHosts === true,
+      model: normalizeModel(result.model),
+      styles: (result.styles as ReplyStyle[] | undefined) || DEFAULT_STYLES,
+      language: normalizeLanguage(result.language),
+      autoTrigger: result.autoTrigger === undefined ? true : Boolean(result.autoTrigger),
+      autoInGroups: Boolean(result.autoInGroups),
+      autoAgent: Boolean(result.autoAgent),
+      customSystemPrompt: typeof result.customSystemPrompt === 'string' ? result.customSystemPrompt : undefined,
+      customUserPrompt: typeof result.customUserPrompt === 'string' ? result.customUserPrompt : undefined,
+      privacyAcknowledged: result.privacyAcknowledged === undefined ? false : Boolean(result.privacyAcknowledged),
+      redactPii: result.redactPii === undefined ? true : Boolean(result.redactPii),
+      anonymizeSenders: result.anonymizeSenders === undefined ? true : Boolean(result.anonymizeSenders),
+      contextMessageLimit: normalizeOptionalInt(result.contextMessageLimit, { min: 1, max: 50 }),
+      maxCharsPerMessage: normalizeOptionalInt(result.maxCharsPerMessage, { min: 50, max: 4000 }),
+      maxTotalChars: normalizeOptionalInt(result.maxTotalChars, { min: 200, max: 20_000 }),
+      temperature: normalizeOptionalInt(result.temperature, { min: 0, max: 100 }),
+      fallbackProvider: result.fallbackProvider,
+      fallbackBaseUrl: normalizeBaseUrl(result.fallbackBaseUrl),
+      fallbackAllowInsecureHttp: result.fallbackAllowInsecureHttp === true,
+      fallbackAllowPrivateHosts: result.fallbackAllowPrivateHosts === true,
+      fallbackModel: normalizeModel(result.fallbackModel),
+      fallbackApiKey: keys.fallbackApiKey,
+      enableFallback,
+      suggestionCount: normalizeSuggestionCount(result.suggestionCount),
+      cacheStrategy: normalizeCacheStrategy(result.cacheStrategy),
+      enableMemory,
+      persistApiKey,
+    });
+  }
+}
+
+async function setConfig(config: Config) {
+  const enforced = applyReleaseRestrictions(config);
+  const inferredAdvancedMode = enforced.advancedMode ?? (enforced.provider !== 'builtin');
+  const effectiveProvider: ProviderType = inferredAdvancedMode ? enforced.provider : 'builtin';
+
+  const incomingApiKey = (enforced.apiKey ?? '').trim();
+  const apiKey = incomingApiKey || currentConfig?.apiKey || '';
+  if (!apiKey) {
+    return { error: 'API Key is required' };
+  }
+
+  const normalizedStyles = sanitizeStyles(enforced.styles);
+  const normalizedSuggestionCount = normalizeSuggestionCount(enforced.suggestionCount);
+
+  const enableFallback = enforced.enableFallback ?? false;
+  const incomingFallbackApiKey = (enforced.fallbackApiKey ?? '').trim();
+  const fallbackApiKey = enableFallback
+    ? (incomingFallbackApiKey || currentConfig?.fallbackApiKey || '')
+    : undefined;
+  if (enableFallback && !fallbackApiKey) {
+    return { error: 'Fallback API Key is required' };
+  }
+
+  const autoTrigger = enforced.autoTrigger === undefined ? (currentConfig?.autoTrigger ?? true) : Boolean(enforced.autoTrigger);
+  const requestedAutoAgent = enforced.autoAgent === undefined ? (currentConfig?.autoAgent ?? false) : Boolean(enforced.autoAgent);
+  const autoAgent = inferredAdvancedMode && requestedAutoAgent;
+  const privacyAcknowledged = enforced.privacyAcknowledged === undefined
+    ? (currentConfig?.privacyAcknowledged ?? false)
+    : Boolean(enforced.privacyAcknowledged);
+
+  const customSystemPrompt = typeof enforced.customSystemPrompt === 'string' ? enforced.customSystemPrompt.trim() : '';
+  const customUserPrompt = typeof enforced.customUserPrompt === 'string' ? enforced.customUserPrompt.trim() : '';
+
+  currentConfig = {
+    ...enforced,
+    provider: effectiveProvider,
+    apiKey,
+    advancedMode: inferredAdvancedMode,
+    baseUrl: normalizeBaseUrl(enforced.baseUrl),
+    allowInsecureHttp: enforced.allowInsecureHttp ?? false,
+    allowPrivateHosts: enforced.allowPrivateHosts ?? false,
+    model: normalizeModel(enforced.model),
+    language: normalizeLanguage(enforced.language),
+    autoTrigger,
+    autoInGroups: Boolean(enforced.autoInGroups),
+    autoAgent,
+    customSystemPrompt: customSystemPrompt || undefined,
+    customUserPrompt: customUserPrompt || undefined,
+    redactPii: enforced.redactPii ?? true,
+    anonymizeSenders: enforced.anonymizeSenders ?? true,
+    contextMessageLimit: normalizeOptionalInt(enforced.contextMessageLimit, { min: 1, max: 50 }),
+    maxCharsPerMessage: normalizeOptionalInt(enforced.maxCharsPerMessage, { min: 50, max: 4000 }),
+    maxTotalChars: normalizeOptionalInt(enforced.maxTotalChars, { min: 200, max: 20_000 }),
+    temperature: normalizeOptionalInt(enforced.temperature, { min: 0, max: 100 }) ?? (currentConfig?.temperature ?? 80),
+    enableFallback,
+    fallbackBaseUrl: enableFallback ? normalizeBaseUrl(enforced.fallbackBaseUrl) : undefined,
+    fallbackAllowInsecureHttp: enableFallback ? (enforced.fallbackAllowInsecureHttp ?? false) : false,
+    fallbackAllowPrivateHosts: enableFallback ? (enforced.fallbackAllowPrivateHosts ?? false) : false,
+    fallbackModel: normalizeModel(enforced.fallbackModel),
+    fallbackApiKey,
+    styles: normalizedStyles,
+    suggestionCount: normalizedSuggestionCount,
+    cacheStrategy: normalizeCacheStrategy(enforced.cacheStrategy),
+    enableMemory: enforced.enableMemory ?? false,
+    persistApiKey: enforced.persistApiKey ?? false,
+    privacyAcknowledged,
+  };
+
+  // 保存到 storage
+  const baseConfigToPersist = {
+    advancedMode: currentConfig.advancedMode ?? false,
+    provider: currentConfig.provider,
+    ...(currentConfig.baseUrl ? { baseUrl: currentConfig.baseUrl } : {}),
+    allowInsecureHttp: currentConfig.allowInsecureHttp ?? false,
+    allowPrivateHosts: currentConfig.allowPrivateHosts ?? false,
+    model: currentConfig.model,
+    styles: currentConfig.styles,
+    language: currentConfig.language ?? 'auto',
+    autoTrigger: currentConfig.autoTrigger ?? true,
+    autoInGroups: currentConfig.autoInGroups ?? false,
+    autoAgent: currentConfig.autoAgent ?? false,
+    customSystemPrompt: currentConfig.customSystemPrompt,
+    customUserPrompt: currentConfig.customUserPrompt,
+    privacyAcknowledged: currentConfig.privacyAcknowledged ?? false,
+    redactPii: currentConfig.redactPii ?? true,
+    anonymizeSenders: currentConfig.anonymizeSenders ?? true,
+    contextMessageLimit: currentConfig.contextMessageLimit,
+    maxCharsPerMessage: currentConfig.maxCharsPerMessage,
+    maxTotalChars: currentConfig.maxTotalChars,
+    temperature: currentConfig.temperature ?? 80,
+    fallbackProvider: currentConfig.fallbackProvider,
+    ...(currentConfig.fallbackBaseUrl ? { fallbackBaseUrl: currentConfig.fallbackBaseUrl } : {}),
+    fallbackAllowInsecureHttp: currentConfig.fallbackAllowInsecureHttp ?? false,
+    fallbackAllowPrivateHosts: currentConfig.fallbackAllowPrivateHosts ?? false,
+    fallbackModel: currentConfig.fallbackModel,
+    enableFallback: currentConfig.enableFallback ?? false,
+    suggestionCount: currentConfig.suggestionCount,
+    cacheStrategy: currentConfig.cacheStrategy,
+    enableMemory: currentConfig.enableMemory ?? false,
+    persistApiKey: currentConfig.persistApiKey ?? false,
+  };
+
+  if (currentConfig.persistApiKey) {
+    const toSet: Record<string, unknown> = {
+      ...baseConfigToPersist,
+      apiKey: currentConfig.apiKey,
+    };
+    if (currentConfig.enableFallback && currentConfig.fallbackApiKey) {
+      toSet.fallbackApiKey = currentConfig.fallbackApiKey;
+    }
+    await storageLocalSet(toSet);
+    const keysToRemove: string[] = [];
+    if (!currentConfig.baseUrl) keysToRemove.push('baseUrl');
+    if (!currentConfig.customSystemPrompt) keysToRemove.push('customSystemPrompt');
+    if (!currentConfig.customUserPrompt) keysToRemove.push('customUserPrompt');
+    if (!currentConfig.fallbackBaseUrl) keysToRemove.push('fallbackBaseUrl');
+    if (!(currentConfig.enableFallback && currentConfig.fallbackApiKey)) {
+      keysToRemove.push('fallbackApiKey');
+    }
+    if (keysToRemove.length) {
+      await storageLocalRemove(keysToRemove);
+    }
+    await clearSessionKeys();
+  } else {
+    await storageLocalSet(baseConfigToPersist);
+    const keysToRemove: string[] = ['apiKey', 'fallbackApiKey'];
+    if (!currentConfig.baseUrl) keysToRemove.push('baseUrl');
+    if (!currentConfig.customSystemPrompt) keysToRemove.push('customSystemPrompt');
+    if (!currentConfig.customUserPrompt) keysToRemove.push('customUserPrompt');
+    if (!currentConfig.fallbackBaseUrl) keysToRemove.push('fallbackBaseUrl');
+    if (keysToRemove.length) {
+      await storageLocalRemove(keysToRemove);
+    }
+    try {
+      await setSessionKeys(currentConfig.apiKey, currentConfig.enableFallback ? currentConfig.fallbackApiKey : undefined);
+    } catch (err) {
+      debugWarn(
+        '[Social Copilot] Failed to persist session keys (service worker may lose key on restart):',
+        sanitizeErrorForDiagnostics(err)
+      );
+    }
+  }
+
+  const managerConfig = buildManagerConfig(currentConfig);
+  fallbackModeActive = false;
+  const promptRegistry = buildPromptHookRegistry(currentConfig);
+  llmManager = new LLMManager(
+    managerConfig,
+    {
+      onFallback: handleFallbackEvent,
+      onRecovery: handleRecoveryEvent,
+      onAllFailed: handleAllFailedEvent,
+    },
+    promptRegistry
+  );
+
+  const profileLLM: LLMProvider = {
+    get name() {
+      return llmManager?.getActiveProvider() || currentConfig?.provider || 'deepseek';
+    },
+    generateReply: (input: LLMInput) => {
+      if (!llmManager) {
+        throw new Error('LLM manager not initialized');
+      }
+      const sanitizedInput: LLMInput = {
+        ...input,
+        context: sanitizeOutboundContext(input.context, buildOutboundPrivacyOptions(currentConfig)),
+      };
+      return llmManager.generateReply(sanitizedInput);
+    },
+  };
+
+  profileUpdater = new ProfileUpdater(profileLLM, 20);
+
+  const fallbackLabel = managerConfig.fallback ? managerConfig.fallback.provider : 'disabled';
+  debugLog(`[Social Copilot] Config updated: provider=${currentConfig.provider}, fallback=${fallbackLabel}`);
+  return { success: true };
+}
+
+function buildManagerConfig(config: Config): LLMManagerConfig {
+  const enforced = applyReleaseRestrictions(config);
+  const inferredAdvancedMode = enforced.advancedMode ?? (enforced.provider !== 'builtin');
+  const isBuiltin = !inferredAdvancedMode || enforced.provider === 'builtin';
+  const fallbackEnabled = (enforced.enableFallback ?? false) && !!enforced.fallbackApiKey;
+  const cacheStrategy = normalizeCacheStrategy(enforced.cacheStrategy);
+  const cache =
+    cacheStrategy === 'off'
+      ? { enabled: false }
+      : {
+          enabled: true,
+          ttl: cacheStrategy === 'always' ? CACHE_TTL_ALWAYS_MS : CACHE_TTL_AUTO_MS,
+        };
+  return {
+    primary: {
+      provider: isBuiltin ? 'builtin' : enforced.provider,
+      apiKey: enforced.apiKey,
+      model: isBuiltin ? BUILTIN_MODEL : enforced.model,
+      baseUrl: isBuiltin ? undefined : enforced.baseUrl,
+      allowInsecureHttp: enforced.allowInsecureHttp ?? false,
+      allowPrivateHosts: enforced.allowPrivateHosts ?? false,
+    },
+    fallback: fallbackEnabled
+      ? {
+          provider: enforced.fallbackProvider || enforced.provider,
+          apiKey: enforced.fallbackApiKey as string,
+          model: enforced.fallbackModel,
+          baseUrl: enforced.fallbackBaseUrl,
+          allowInsecureHttp: enforced.fallbackAllowInsecureHttp ?? false,
+          allowPrivateHosts: enforced.fallbackAllowPrivateHosts ?? false,
+        }
+      : undefined,
+    cache,
+  };
+}
+
+function buildPromptHookRegistry(config: Config): PromptHookRegistry | undefined {
+  const customSystemPrompt = (config.customSystemPrompt ?? '').trim();
+  const customUserPrompt = (config.customUserPrompt ?? '').trim();
+  if (!customSystemPrompt && !customUserPrompt) return undefined;
+
+  const registry = new PromptHookRegistry();
+  registry.register({
+    name: 'custom-prompts',
+    transformSystemPrompt: (prompt, input) => {
+      if (!customSystemPrompt) return prompt;
+      const rendered = interpolateCustomPrompt(customSystemPrompt, input).trim();
+      if (!rendered) return prompt;
+      return `${prompt}\n\n【自定义系统提示】\n${rendered}`;
+    },
+    transformUserPrompt: (prompt, input) => {
+      if (!customUserPrompt) return prompt;
+      const rendered = interpolateCustomPrompt(customUserPrompt, input).trim();
+      if (!rendered) return prompt;
+      return `${prompt}\n\n【自定义用户提示】\n${rendered}`;
+    },
+  });
+  return registry;
+}
+
+async function handleFallbackEvent(fromProvider: string, toProvider: string, error: Error) {
+  debugWarn('[Social Copilot] Fallback triggered:', sanitizeErrorForDiagnostics(error));
+  fallbackModeActive = true;
+  pushDiagnostic({
+    ts: Date.now(),
+    type: 'FALLBACK',
+    requestId: generateRequestId(),
+    ok: true,
+    details: { fromProvider, toProvider, message: redactSecrets(error.message) },
+  });
+}
+
+async function handleRecoveryEvent(provider: string) {
+  fallbackModeActive = false;
+  pushDiagnostic({
+    ts: Date.now(),
+    type: 'RECOVERY',
+    requestId: generateRequestId(),
+    ok: true,
+    details: { provider },
+  });
+}
+
+async function handleAllFailedEvent(errors: Error[]) {
+  pushDiagnostic({
+    ts: Date.now(),
+    type: 'ALL_FAILED',
+    requestId: generateRequestId(),
+    ok: false,
+    error: { name: 'AllProvidersFailed', message: redactSecrets(errors.map((e) => e.message).join('; ')) },
+  });
+}
+
+async function handleAnalyzeThought(payload: { context: ConversationContext }) {
+  const analyzer = new ThoughtAnalyzer();
+  const result = analyzer.analyze(payload.context);
+  let recommended = result.recommended;
+
+  try {
+    if (!thoughtPreferenceManager) {
+      thoughtPreferenceManager = new ThoughtPreferenceManager(store);
+    }
+    const preference = await thoughtPreferenceManager.getPreference(payload.context.contactKey);
+    if (preference?.thoughtHistory?.length) {
+      const countMap = new Map<ThoughtType, number>(
+        preference.thoughtHistory.map((entry) => [entry.thought, entry.count])
+      );
+      const baseOrder = new Map<ThoughtType, number>(
+        result.recommended.map((thought, idx) => [thought, idx])
+      );
+      recommended = [...result.recommended].sort((a, b) => {
+        const diff = (countMap.get(b) ?? 0) - (countMap.get(a) ?? 0);
+        if (diff !== 0) return diff;
+        return (baseOrder.get(a) ?? 0) - (baseOrder.get(b) ?? 0);
+      });
+    }
+
+    if (preference?.defaultThought && recommended.includes(preference.defaultThought)) {
+      recommended = [
+        preference.defaultThought,
+        ...recommended.filter((t) => t !== preference.defaultThought),
+      ];
+    }
+  } catch {
+    // best-effort only
+  }
+
+  const normalizedResult = recommended === result.recommended ? result : { ...result, recommended };
+  const cards = recommended.map((type) => THOUGHT_CARDS[type]);
+  return {
+    result: normalizedResult,
+    cards,
+    tone: normalizedResult.tone,
+    toneSummary: normalizedResult.toneSummary,
+  };
+}
+
+async function handleGenerateReply(payload: {
+  contactKey: ContactKey;
+  messages: Message[];
+  currentMessage: Message;
+  thoughtDirection?: ThoughtType;
+  source?: 'auto' | 'manual';
+}, requestId?: string) {
+  const { contactKey, messages, currentMessage, thoughtDirection } = payload;
+  const source = payload.source === 'auto' ? 'auto' : 'manual';
+  let memorySummary: string | undefined;
+  let language: 'zh' | 'en' = 'zh';
+  let messageCount = 0;
+  let profile: ContactProfile | null = null;
+  const activeRequestId = requestId?.trim() || generateRequestId();
+  const controller = new AbortController();
+  const signal = controller.signal;
+  activeGenerateRequests.set(activeRequestId, controller);
+
+  try {
+    throwIfAborted(signal);
+
+    // Ensure config/LLM is available before touching local memory or calling providers.
+    if (!llmManager || !currentConfig) {
+      await loadConfig();
+    }
+    if (!llmManager || !currentConfig) {
+      return { error: 'NO_API_KEY', errorCategory: 'missing_api_key' };
+    }
+    if (!currentConfig.privacyAcknowledged) {
+      return { error: '首次使用请先在扩展设置中确认隐私告知。', errorCategory: 'privacy_unacknowledged' };
+    }
+
+    language = resolveLanguage(currentConfig.language, currentMessage, messages);
+
+    const includeTextInLocalStore = Boolean(currentConfig?.enableMemory ?? false);
+    for (const msg of messages) {
+      throwIfAborted(signal);
+      await store.saveMessage(sanitizeMessageForLocalStore(msg, includeTextInLocalStore));
+    }
+
+    messageCount = await store.getMessageCount(contactKey);
+
+    profile = await store.getProfile(contactKey);
+    if (!profile) {
+      profile = {
+        key: contactKey,
+        displayName: contactKey.peerId,
+        interests: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await store.saveProfile(profile);
+    } else {
+      profile = await maybeMigrateContactState(contactKey, profile);
+    }
+
+    throwIfAborted(signal);
+    profile = await maybeUpdateProfile(contactKey, profile, messages, messageCount, language, signal);
+    throwIfAborted(signal);
+
+    if (currentConfig?.enableMemory ?? false) {
+      try {
+        const memory = await store.getContactMemorySummary(contactKey);
+        if (memory?.summary) {
+          memorySummary = memory.summary;
+        }
+      } catch {
+        // best-effort
+      }
+    }
+
+    const suggestionCount = normalizeSuggestionCount(currentConfig?.suggestionCount);
+    const baseStyles = (currentConfig?.styles || DEFAULT_STYLES).slice(0, suggestionCount);
+    const recommended = preferenceManager
+      ? await preferenceManager.getRecommendedStyles(contactKey)
+      : baseStyles;
+    const styles = mergeStyles(baseStyles, recommended).slice(0, suggestionCount);
+
+    const input: LLMInput = {
+      context: buildSanitizedOutboundContext(contactKey, messages, currentMessage),
+      profile,
+      styles: styles as ReplyStyle[],
+      language,
+      temperature: (currentConfig.temperature ?? 80) / 100,
+    };
+
+    if (memorySummary) {
+      input.memorySummary = memorySummary;
+    }
+
+    if (thoughtDirection) {
+      input.thoughtDirection = thoughtDirection;
+      input.thoughtHint = THOUGHT_CARDS[thoughtDirection]?.promptHint;
+    }
+
+    const cacheStrategy = normalizeCacheStrategy(currentConfig?.cacheStrategy);
+    if (cacheStrategy === 'auto' && source !== 'auto') {
+      input.cacheKeySalt = generateRequestId();
+    }
+
+    throwIfAborted(signal);
+    const output = await llmManager.generateReply(input, { signal });
+    const activeProvider = llmManager.getActiveProvider();
+
+    // 异步更新长期记忆（不阻塞本次回复）
+    if ((currentConfig?.enableMemory ?? false) && profile) {
+      void maybeUpdateMemory(contactKey, profile, messageCount, language);
+    }
+
+    if (thoughtDirection) {
+      void recordThoughtSelection(contactKey, thoughtDirection);
+    }
+
+    return {
+      candidates: output.candidates,
+      model: output.model,
+      latency: output.latency,
+      provider: activeProvider,
+      usingFallback: Boolean(fallbackModeActive && llmManager.hasFallback()),
+    };
+  } catch (error) {
+    if (isAbortError(error)) {
+      return { error: 'REQUEST_ABORTED', errorCategory: 'aborted' };
+    }
+    debugError('[Social Copilot] Failed to generate reply:', sanitizeErrorForDiagnostics(error));
+    const message = toUserErrorMessage(error);
+    const errorCategory = classifyGenerateReplyError(error);
+
+    if ((currentConfig?.enableMemory ?? false) && profile) {
+      void maybeUpdateMemory(contactKey, profile, messageCount, language);
+    }
+    return { error: message, errorCategory };
+  } finally {
+    activeGenerateRequests.delete(activeRequestId);
+  }
+}
+
+async function maybeMigrateContactState(contactKey: ContactKey, profile: ContactProfile): Promise<ContactProfile> {
+  const desiredKeyStr = contactKeyToString(contactKey);
+  const currentKeyStr = contactKeyToString(profile.key);
+  if (desiredKeyStr === currentKeyStr) return profile;
+
+  // Migrate profile key to the new canonical ContactKey (stable conversationId/accountId).
+  const migrated: ContactProfile = {
+    ...profile,
+    key: contactKey,
+    displayName: contactKey.peerId || profile.displayName,
+    updatedAt: Date.now(),
+  };
+
+  try {
+    await store.saveProfile(migrated);
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to migrate profile key:', err);
+  }
+
+  // Best-effort: copy style preferences & memory summary to new key (do not delete old records).
+  try {
+    const pref = await store.getStylePreference(profile.key);
+    if (pref && pref.contactKeyStr !== desiredKeyStr) {
+      await store.saveStylePreference({ ...pref, contactKeyStr: desiredKeyStr, updatedAt: Date.now() });
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const thoughtPref = await store.getThoughtPreference(profile.key);
+    if (thoughtPref && thoughtPref.contactKeyStr !== desiredKeyStr) {
+      await store.saveThoughtPreference({ ...thoughtPref, contactKeyStr: desiredKeyStr, updatedAt: Date.now() });
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const memory = await store.getContactMemorySummary(profile.key);
+    if (memory && memory.summary) {
+      await store.saveContactMemorySummary(contactKey, memory.summary);
+    }
+  } catch {
+    // ignore
+  }
+
+  return migrated;
+}
+
+type GenerateReplyErrorCategory =
+  | 'aborted'
+  | 'missing_api_key'
+  | 'privacy_unacknowledged'
+  | 'parse_error'
+  | 'timeout'
+  | 'rate_limit'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'server_error'
+  | 'network_error'
+  | 'db_error'
+  | 'unknown';
+
+function isRetriableGenerateReplyCategory(category: string | undefined): boolean {
+  return category === 'timeout'
+    || category === 'rate_limit'
+    || category === 'server_error'
+    || category === 'network_error'
+    || category === 'parse_error'
+    || category === 'unknown';
+}
+
+function classifyGenerateReplyError(error: unknown): GenerateReplyErrorCategory {
+  if (isAbortError(error)) {
+    return 'aborted';
+  }
+  if (error instanceof ReplyParseError) {
+    return 'parse_error';
+  }
+
+  const message = redactSecrets(error instanceof Error ? error.message : String(error));
+  const text = message.toLowerCase();
+
+  if (
+    text.includes('indexeddb')
+    || text.includes('database not initialized')
+    || text.includes('数据库')
+  ) {
+    return 'db_error';
+  }
+
+  if (text.includes('timed out') || text.includes('timeout')) {
+    return 'timeout';
+  }
+  if (text.includes('429')) {
+    return 'rate_limit';
+  }
+  if (text.includes('401')) {
+    return 'unauthorized';
+  }
+  if (text.includes('403')) {
+    return 'forbidden';
+  }
+  if (/(500|502|503|504)/.test(text)) {
+    return 'server_error';
+  }
+
+  if (
+    text.includes('fetch failed')
+    || text.includes('network')
+    || text.includes('econnrefused')
+    || text.includes('econnreset')
+    || text.includes('enet')
+    || text.includes('ehost')
+  ) {
+    return 'network_error';
+  }
+
+  return 'unknown';
+}
+
+function toUserErrorMessage(error: unknown): string {
+  if (error instanceof ReplyParseError) {
+    return 'AI 回复格式不正确，请重试。';
+  }
+  const message = redactSecrets(error instanceof Error ? error.message : String(error));
+
+  // IndexedDB failures are self-healable via "Clear Data" but the raw errors are confusing to users.
+  if (
+    /Unsupported IndexedDB schema/i.test(message)
+    || /IndexedDB migration failed/i.test(message)
+    || /IndexedDB 迁移失败/.test(message)
+    || /Database not initialized/i.test(message)
+  ) {
+    return '本地数据库初始化失败（可能是升级/回滚导致数据不兼容）。请在扩展设置页导出诊断后点击“清除数据”恢复。';
+  }
+  if (
+    /IndexedDB open blocked/i.test(message)
+    || /IndexedDB 打开被阻塞/.test(message)
+    || (/blocked/i.test(message) && /IndexedDB/i.test(message))
+    || (/被阻塞/.test(message) && /IndexedDB/i.test(message))
+  ) {
+    return '本地数据库被占用（可能有聊天站点标签页阻塞）。请先关闭 Telegram/WhatsApp/Slack 等站点标签页后重试，必要时在设置页执行“清除数据”。';
+  }
+
+  if (/timed out/i.test(message) || /timeout/i.test(message)) {
+    return '请求超时，请检查网络后重试。';
+  }
+  if (message.includes('401')) {
+    return 'API Key 无效或权限不足（401）。';
+  }
+  if (message.includes('403')) {
+    return '访问被拒绝（403）。';
+  }
+  if (message.includes('429')) {
+    return '请求过于频繁或配额不足（429），请稍后重试。';
+  }
+  if (/(500|502|503|504)/.test(message)) {
+    return '模型服务异常，请稍后重试。';
+  }
+
+  return message || '请求失败，请重试。';
+}
+
+function normalizeSuggestionCount(count: unknown): 2 | 3 {
+  return count === 2 ? 2 : 3;
+}
+
+function sanitizeStyles(styles: unknown): ReplyStyle[] {
+  const allowed: ReplyStyle[] = ['humorous', 'caring', 'rational', 'casual', 'formal'];
+  if (!Array.isArray(styles)) {
+    return DEFAULT_STYLES;
+  }
+  const unique = Array.from(new Set(styles.filter((s): s is ReplyStyle => allowed.includes(s as ReplyStyle))));
+  return unique.length > 0 ? unique : DEFAULT_STYLES;
+}
+
+async function maybeUpdateProfile(
+  contactKey: ContactKey,
+  profile: ContactProfile,
+  recentMessages: Message[],
+  messageCount: number,
+  language: 'zh' | 'en',
+  signal?: AbortSignal
+): Promise<ContactProfile> {
+  if (!profileUpdater) return profile;
+
+  const contactKeyStr = contactKeyToString(contactKey);
+  const lastUpdate = lastProfileUpdateCount.get(contactKeyStr) || 0;
+  if (profileUpdateInFlight.has(contactKeyStr)) return profile;
+
+  if (profileUpdater.shouldUpdate(messageCount, lastUpdate)) {
+    profileUpdateInFlight.add(contactKeyStr);
+    let updateAttemptCompleted = false;
+    if (debugEnabled) {
+      debugLog('[Social Copilot] Updating profile for:', profile.displayName);
+    }
+
+    try {
+      throwIfAborted(signal);
+      const updates = await profileUpdater.extractProfileUpdates(recentMessages, profile, language, { signal });
+      throwIfAborted(signal);
+      updateAttemptCompleted = true;
+      if (Object.keys(updates).length > 0) {
+        await store.updateProfile(contactKey, updates);
+        const refreshed = await store.getProfile(contactKey);
+        if (refreshed) {
+          profile = refreshed;
+        }
+        if (debugEnabled) {
+          debugLog('[Social Copilot] Profile updated');
+        }
+      } else {
+        if (debugEnabled) {
+          debugLog('[Social Copilot] Profile update skipped: no incremental changes for', profile.displayName);
+        }
+      }
+    } catch (error) {
+      debugError('[Social Copilot] Failed to update profile:', sanitizeErrorForDiagnostics(error));
+    } finally {
+      profileUpdateInFlight.delete(contactKeyStr);
+      if (updateAttemptCompleted) {
+        await setLastProfileUpdateCount(contactKeyStr, messageCount);
+      }
+    }
+  }
+
+  return profile;
+}
+
+async function maybeUpdateMemory(
+  contactKey: ContactKey,
+  profile: ContactProfile,
+  messageCount: number,
+  language: 'zh' | 'en'
+): Promise<void> {
+  if (!llmManager) return;
+  if (!(currentConfig?.enableMemory ?? false)) return;
+  // 默认不对群聊做长期记忆，避免噪声与隐私风险
+  if (contactKey.isGroup) return;
+
+  const contactKeyStr = contactKeyToString(contactKey);
+  const lastUpdate = lastMemoryUpdateCount.get(contactKeyStr) || 0;
+  if (messageCount - lastUpdate < MEMORY_UPDATE_THRESHOLD) return;
+  const lastFailureAt = lastMemoryUpdateFailureAt.get(contactKeyStr);
+  if (lastFailureAt) {
+    const failureCount = memoryUpdateFailureCount.get(contactKeyStr) ?? 1;
+    const backoffMs = getMemoryUpdateFailureBackoffMs(failureCount);
+    if (Date.now() - lastFailureAt < backoffMs) return;
+  }
+  if (memoryUpdateInFlight.has(contactKeyStr)) return;
+
+  memoryUpdateInFlight.add(contactKeyStr);
+  const startedAt = Date.now();
+
+  try {
+    const recentMessages = await store.getRecentMessages(contactKey, MEMORY_CONTEXT_MESSAGE_LIMIT);
+    if (recentMessages.length === 0) {
+      return;
+    }
+
+    const existing = await store.getContactMemorySummary(contactKey);
+    const currentMessage = recentMessages[recentMessages.length - 1];
+    const input: LLMInput = {
+      task: 'memory_extraction',
+      context: buildSanitizedOutboundContext(contactKey, recentMessages.slice(0, -1), currentMessage),
+      profile,
+      memorySummary: existing?.summary,
+      styles: ['rational'],
+      language,
+      maxLength: 800,
+    };
+
+    const output = await llmManager.generateReply(input);
+    const raw = output.candidates[0]?.text ?? '';
+
+    const parsed = parseJsonObjectFromText(raw);
+
+    const summary = (parsed as { summary?: unknown })?.summary;
+    if (typeof summary !== 'string' || summary.trim() === '') {
+      throw new Error('Memory extraction returned empty summary');
+    }
+
+    const normalized = summary.trim().slice(0, MEMORY_SUMMARY_MAX_LEN);
+    await store.saveContactMemorySummary(contactKey, normalized);
+    await setLastMemoryUpdateCount(contactKeyStr, messageCount);
+    lastMemoryUpdateFailureAt.delete(contactKeyStr);
+    memoryUpdateFailureCount.delete(contactKeyStr);
+
+    pushDiagnostic({
+      ts: Date.now(),
+      type: 'MEMORY_UPDATE',
+      requestId: generateRequestId(),
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      details: {
+        contactKeySummary: summarizeContactKeyForDiagnostics(contactKey),
+        provider: llmManager.getActiveProvider(),
+        model: output.model,
+        latency: output.latency,
+        summaryLen: normalized.length,
+      },
+    });
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    lastMemoryUpdateFailureAt.set(contactKeyStr, Date.now());
+    memoryUpdateFailureCount.set(contactKeyStr, (memoryUpdateFailureCount.get(contactKeyStr) ?? 0) + 1);
+    pushDiagnostic({
+      ts: Date.now(),
+      type: 'MEMORY_UPDATE',
+      requestId: generateRequestId(),
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      details: { contactKeySummary: summarizeContactKeyForDiagnostics(contactKey) },
+      error: sanitizeErrorForDiagnostics(err),
+    });
+  } finally {
+    memoryUpdateInFlight.delete(contactKeyStr);
+  }
+}
+
+async function getProfile(contactKey: ContactKey) {
+  const profile = await store.getProfile(contactKey);
+  return { profile };
+}
+
+async function updateProfile(contactKey: ContactKey, updates: Partial<ContactProfile>) {
+  await store.updateProfile(contactKey, updates);
+  return { success: true };
+}
+
+async function getContactMemory(contactKey: ContactKey) {
+  const memory = await store.getContactMemorySummary(contactKey);
+  return { memory };
+}
+
+async function clearContactMemory(contactKey: ContactKey) {
+  await store.deleteContactMemorySummary(contactKey);
+  const keyStr = contactKeyToString(contactKey);
+  lastMemoryUpdateCount.delete(keyStr);
+  lastMemoryUpdateFailureAt.delete(keyStr);
+  memoryUpdateFailureCount.delete(keyStr);
+  try {
+    await persistMemoryUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist memory update counts:', err);
+  }
+  return { success: true };
+}
+
+async function clearContactData(contactKey: ContactKey) {
+  await store.deleteMessages(contactKey);
+  await store.deleteProfile(contactKey);
+  await store.deleteStylePreference(contactKey);
+  await store.deleteThoughtPreference(contactKey);
+  await store.deleteContactMemorySummary(contactKey);
+
+  // Best-effort: clear counters for all known key variants
+  for (const keyStr of getContactKeyStrCandidates(contactKey)) {
+    lastProfileUpdateCount.delete(keyStr);
+    profileUpdateInFlight.delete(keyStr);
+    lastMemoryUpdateCount.delete(keyStr);
+    lastMemoryUpdateFailureAt.delete(keyStr);
+    memoryUpdateFailureCount.delete(keyStr);
+  }
+  try {
+    await persistProfileUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist profile update counts:', err);
+  }
+  try {
+    await persistMemoryUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist memory update counts:', err);
+  }
+
+  return { success: true };
+}
+
+async function getContacts() {
+  try {
+    const profiles = await store.getAllProfiles();
+    const contacts = await Promise.all(
+      profiles.map(async (profile) => {
+        const messageCount = await store.getMessageCount(profile.key);
+        const memory = await store.getContactMemorySummary(profile.key);
+        return {
+          displayName: profile.displayName,
+          app: profile.key.app,
+          messageCount,
+          key: profile.key,
+          memorySummary: memory?.summary ?? null,
+          memoryUpdatedAt: memory?.updatedAt ?? null,
+        };
+      })
+    );
+    return { contacts };
+  } catch (error) {
+    debugError('[Social Copilot] Failed to get contacts:', sanitizeErrorForDiagnostics(error));
+    return { contacts: [] };
+  }
+}
+
+async function getContactsWithPrefs() {
+  try {
+    if (!preferenceManager) {
+      preferenceManager = new StylePreferenceManager(store);
+    }
+    const profiles = await store.getAllProfiles();
+    const contacts = await Promise.all(
+      profiles.map(async (profile) => {
+        const [messageCount, memory, preference] = await Promise.all([
+          store.getMessageCount(profile.key),
+          store.getContactMemorySummary(profile.key),
+          preferenceManager!.getPreference(profile.key),
+        ]);
+        return {
+          displayName: profile.displayName,
+          app: profile.key.app,
+          messageCount,
+          key: profile.key,
+          memorySummary: memory?.summary ?? null,
+          memoryUpdatedAt: memory?.updatedAt ?? null,
+          preference: preference ?? null,
+        };
+      })
+    );
+    return { contacts };
+  } catch (error) {
+    debugError('[Social Copilot] Failed to get contacts with prefs:', sanitizeErrorForDiagnostics(error));
+    return { contacts: [] };
+  }
+}
+
+async function clearData() {
+  let storageClearError: Error | null = null;
+
+  try {
+    await store.deleteDatabase();
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    storeInitError = e;
+    return { success: false, error: `无法删除本地数据库：${e.message}` };
+  }
+
+  try {
+    await clearPersistedDiagnostics();
+    await storageLocalClear();
+  } catch (err) {
+    storageClearError = err instanceof Error ? err : new Error(String(err));
+  }
+
+  try {
+    await clearSessionKeys();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to clear session keys:', err);
+  }
+
+  lastProfileUpdateCount.clear();
+  profileUpdateInFlight.clear();
+  lastMemoryUpdateCount.clear();
+  lastMemoryUpdateFailureAt.clear();
+  memoryUpdateFailureCount.clear();
+  memoryUpdateInFlight.clear();
+  debugEnabled = false;
+  llmManager = null;
+  fallbackModeActive = false;
+  profileUpdater = null;
+  preferenceManager = null;
+  thoughtPreferenceManager = null;
+  currentConfig = null;
+  storeReady = null;
+  storeInitError = null;
+
+  try {
+    await ensureStoreReady();
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    storeInitError = e;
+    return { success: false, error: `无法重新初始化本地数据库：${e.message}` };
+  }
+
+  if (storageClearError) {
+    return { success: false, error: `无法清除本地配置：${storageClearError.message}` };
+  }
+
+  return { success: true };
+}
+
+function isReplyStyle(style: unknown): style is ReplyStyle {
+  return ['humorous', 'caring', 'rational', 'casual', 'formal'].includes(style as string);
+}
+
+function mergeStyles(base: ReplyStyle[], recommended: ReplyStyle[]): ReplyStyle[] {
+  const ordered: ReplyStyle[] = [];
+  for (const style of recommended) {
+    if (base.includes(style) && !ordered.includes(style)) {
+      ordered.push(style);
+    }
+  }
+  for (const style of base) {
+    if (!ordered.includes(style)) {
+      ordered.push(style);
+    }
+  }
+  return ordered.slice(0, base.length);
+}
+
+async function recordStyleSelection(contactKey: ContactKey, style: ReplyStyle) {
+  if (!isReplyStyle(style)) return { success: false };
+  if (!preferenceManager) {
+    preferenceManager = new StylePreferenceManager(store);
+  }
+  await preferenceManager.recordStyleSelection(contactKey, style);
+  return { success: true };
+}
+
+async function recordThoughtSelection(contactKey: ContactKey, thought: ThoughtType) {
+  if (!THOUGHT_CARDS[thought]) return { success: false };
+  if (!thoughtPreferenceManager) {
+    thoughtPreferenceManager = new ThoughtPreferenceManager(store);
+  }
+  await thoughtPreferenceManager.recordThoughtSelection(contactKey, thought);
+  return { success: true };
+}
+
+async function getStylePreference(contactKey: ContactKey) {
+  if (!preferenceManager) {
+    preferenceManager = new StylePreferenceManager(store);
+  }
+  const preference = await preferenceManager.getPreference(contactKey);
+  return { preference };
+}
+
+async function resetStylePreference(contactKey: ContactKey) {
+  if (!preferenceManager) {
+    preferenceManager = new StylePreferenceManager(store);
+  }
+  await preferenceManager.resetPreference(contactKey);
+  return { success: true };
+}
+
+async function resetThoughtPreference(contactKey: ContactKey) {
+  if (!thoughtPreferenceManager) {
+    thoughtPreferenceManager = new ThoughtPreferenceManager(store);
+  }
+  await thoughtPreferenceManager.resetPreference(contactKey);
+  return { success: true };
+}
+
+async function exportPreferences() {
+  if (!preferenceManager) {
+    preferenceManager = new StylePreferenceManager(store);
+  }
+  const preferences = await preferenceManager.exportPreferences();
+  return { preferences };
+}
+
+interface UserDataBackupV1 {
+  schemaVersion: 1;
+  exportedAt: string;
+  extensionVersion: string;
+  data: {
+    profiles: ContactProfile[];
+    stylePreferences: StylePreference[];
+    thoughtPreferences: ThoughtPreference[];
+    contactMemories: ContactMemorySummary[];
+    profileUpdateCounts: Record<string, number>;
+    memoryUpdateCounts: Record<string, number>;
+  };
+}
+
+function normalizeCountRecordKeys(record: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const normalized = normalizeContactKeyStr(key);
+    const prev = out[normalized];
+    out[normalized] = prev === undefined ? value : Math.max(prev, value);
+  }
+  return out;
+}
+
+async function clampImportedUpdateCountsToMessageCounts(record: Record<string, number>): Promise<Record<string, number>> {
+  const profiles = await store.getAllProfiles();
+  if (profiles.length === 0) return {};
+
+  const maxMessageCountsByKey = new Map<string, number>();
+  await Promise.all(
+    profiles.map(async (profile) => {
+      const messageCount = await store.getMessageCount(profile.key);
+      const normalizedCount = Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0;
+      for (const key of getContactKeyStrCandidates(profile.key)) {
+        const normalizedKey = normalizeContactKeyStr(key);
+        const prev = maxMessageCountsByKey.get(normalizedKey);
+        if (prev === undefined || normalizedCount > prev) {
+          maxMessageCountsByKey.set(normalizedKey, normalizedCount);
+        }
+      }
+    })
+  );
+
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const normalizedKey = normalizeContactKeyStr(key);
+    const maxCount = maxMessageCountsByKey.get(normalizedKey);
+    if (maxCount === undefined) continue;
+
+    const normalizedValue = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+    const clamped = Math.min(normalizedValue, maxCount);
+    if (clamped > 0) {
+      out[normalizedKey] = clamped;
+    }
+  }
+
+  return out;
+}
+
+async function exportUserData(): Promise<{ backup: UserDataBackupV1 }> {
+  const profiles = await store.getAllProfiles();
+  const stylePreferences = await store.getAllStylePreferences();
+  let thoughtPreferences: ThoughtPreference[] = [];
+  try {
+    thoughtPreferences = await store.getAllThoughtPreferences();
+  } catch {
+    thoughtPreferences = [];
+  }
+  const contactMemories = await store.getAllContactMemorySummaries();
+
+  const profileUpdateCounts: Record<string, number> = {};
+  for (const [key, value] of lastProfileUpdateCount.entries()) {
+    if (Number.isFinite(value)) profileUpdateCounts[key] = value;
+  }
+  const memoryUpdateCounts: Record<string, number> = {};
+  for (const [key, value] of lastMemoryUpdateCount.entries()) {
+    if (Number.isFinite(value)) memoryUpdateCounts[key] = value;
+  }
+
+  return {
+    backup: {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      extensionVersion: runtimeGetManifestVersion(),
+      data: {
+        profiles,
+        stylePreferences,
+        thoughtPreferences,
+        contactMemories,
+        profileUpdateCounts,
+        memoryUpdateCounts,
+      },
+    },
+  };
+}
+
+async function importUserData(payload: unknown): Promise<{ success: boolean; error?: string; imported?: Record<string, number>; skipped?: Record<string, number> }> {
+  // Validate payload using Zod schema
+  const validationResult = UserDataBackupSchema.safeParse(payload);
+  if (!validationResult.success) {
+    const errorMessage = formatZodError(validationResult.error);
+    return { success: false, error: `备份文件格式验证失败：${errorMessage}` };
+  }
+
+  const validatedData = validationResult.data;
+  const profileUpdateCounts = normalizeCountRecordKeys(validatedData.data.profileUpdateCounts);
+  const memoryUpdateCounts = normalizeCountRecordKeys(validatedData.data.memoryUpdateCounts);
+  const thoughtPreferences = Array.isArray(validatedData.data.thoughtPreferences)
+    ? validatedData.data.thoughtPreferences
+    : [];
+
+  let importResult:
+    | {
+      imported: { profiles: number; stylePreferences: number; thoughtPreferences: number; contactMemories: number };
+      skipped: Record<string, number>;
+    }
+    | null = null;
+  try {
+    importResult = await store.importSnapshot({
+      schemaVersion: 1,
+      exportedAt: Date.now(),
+      profiles: validatedData.data.profiles,
+      stylePreferences: validatedData.data.stylePreferences,
+      thoughtPreferences,
+      contactMemories: validatedData.data.contactMemories,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, error: `导入失败：${message}` };
+  }
+
+  const profiles = importResult.imported.profiles;
+  const stylePreferences = importResult.imported.stylePreferences;
+  const thoughtPreferencesImported = importResult.imported.thoughtPreferences;
+  const contactMemories = importResult.imported.contactMemories;
+
+  const [clampedProfileUpdateCounts, clampedMemoryUpdateCounts] = await Promise.all([
+    clampImportedUpdateCountsToMessageCounts(profileUpdateCounts),
+    clampImportedUpdateCountsToMessageCounts(memoryUpdateCounts),
+  ]);
+
+  lastProfileUpdateCount.clear();
+  for (const [k, v] of Object.entries(clampedProfileUpdateCounts)) {
+    lastProfileUpdateCount.set(k, v);
+  }
+  try {
+    await persistProfileUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist profile update counts:', err);
+  }
+
+  lastMemoryUpdateCount.clear();
+  lastMemoryUpdateFailureAt.clear();
+  memoryUpdateFailureCount.clear();
+  for (const [k, v] of Object.entries(clampedMemoryUpdateCounts)) {
+    lastMemoryUpdateCount.set(k, v);
+  }
+  try {
+    await persistMemoryUpdateCounts();
+  } catch (err) {
+    debugWarn('[Social Copilot] Failed to persist memory update counts:', err);
+  }
+
+  return {
+    success: true,
+    imported: { profiles, stylePreferences, thoughtPreferences: thoughtPreferencesImported, contactMemories },
+    skipped: importResult.skipped,
+  };
+}

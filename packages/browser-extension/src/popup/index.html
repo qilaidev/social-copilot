@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Copilot</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --sc-bg: #f8fafc;
+        --sc-card: #ffffff;
+        --sc-text: #0f172a;
+        --sc-muted: #64748b;
+        --sc-muted-2: #94a3b8;
+        --sc-border: rgba(15, 23, 42, 0.08);
+        --sc-border-2: rgba(15, 23, 42, 0.05);
+        --sc-primary: #5b5ef6;
+        --sc-primary-2: #7c3aed;
+        --sc-danger: #ef4444;
+        --sc-radius: 16px;
+        --sc-radius-sm: 8px;
+        
+        /* Spacing */
+        --sc-space-xs: 4px;
+        --sc-space-sm: 8px;
+        --sc-space-md: 16px;
+        --sc-space-lg: 24px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sc-bg: #0f172a;
+          --sc-card: #1e293b;
+          --sc-text: #f1f5f9;
+          --sc-muted: #94a3b8;
+          --sc-muted-2: #64748b;
+          --sc-border: rgba(241, 245, 249, 0.12);
+          --sc-border-2: rgba(241, 245, 249, 0.08);
+          --sc-primary: #818cf8;
+          --sc-primary-2: #a78bfa;
+          --sc-danger: #f87171;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--sc-border);
+        border-radius: 999px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--sc-muted-2);
+      }
+
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      body {
+        width: 380px;
+        min-width: 380px;
+        max-height: 600px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--sc-text);
+        background: var(--sc-bg);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: var(--sc-primary);
+        text-decoration: none;
+        font-weight: 500;
+        transition: opacity 0.2s ease;
+      }
+
+      a:hover {
+        opacity: 0.8;
+        text-decoration: underline;
+      }
+
+      a:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 16px;
+        background: var(--sc-card);
+        color: var(--sc-text);
+        border-bottom: 1px solid var(--sc-border);
+        backdrop-filter: blur(8px);
+        background: rgba(var(--sc-card-rgb, 255, 255, 255), 0.8);
+      }
+
+      .header .logo {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9px;
+        font-weight: 900;
+        font-size: 11px;
+        letter-spacing: 0.4px;
+        color: #fff;
+        background: var(--sc-primary);
+        box-shadow: 0 4px 12px rgba(91, 94, 246, 0.2);
+      }
+
+      .header h1 {
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.2;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 8px;
+        padding: 12px 12px 0;
+      }
+
+      .tab {
+        flex: 1;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--sc-border);
+        background: var(--sc-card);
+        color: var(--sc-text);
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .tab:hover {
+        border-color: var(--sc-primary);
+        background: var(--sc-bg);
+      }
+
+      .tab:active {
+        transform: translateY(0.5px);
+      }
+
+      .tab:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .tab.active {
+        border-color: var(--sc-primary);
+        background: rgba(91, 94, 246, 0.08);
+        color: var(--sc-primary);
+      }
+
+      .tab-content {
+        display: none;
+        padding: 16px;
+        margin: 12px;
+        border-radius: var(--sc-radius);
+        background: var(--sc-card);
+        border: 1px solid var(--sc-border);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      .status {
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid var(--sc-border);
+        background: var(--sc-bg);
+        color: var(--sc-text);
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+
+      .status.success {
+        border-color: rgba(34, 197, 94, 0.3);
+        background: rgba(34, 197, 94, 0.05);
+        color: #16a34a;
+      }
+
+      .status.warning {
+        border-color: rgba(245, 158, 11, 0.3);
+        background: rgba(245, 158, 11, 0.05);
+        color: #d97706;
+      }
+
+      .status.info {
+        border-color: rgba(59, 130, 246, 0.3);
+        background: rgba(59, 130, 246, 0.05);
+        color: var(--sc-primary);
+      }
+
+      .form-group {
+        margin-bottom: 16px;
+      }
+
+      .form-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--sc-text);
+      }
+
+      .form-group input[type="text"],
+      .form-group input[type="password"],
+      .form-group input[type="number"],
+      .form-group select,
+      .form-group textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--sc-border);
+        border-radius: 10px;
+        font-size: 13.5px;
+        background: var(--sc-bg);
+        color: var(--sc-text);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .form-group input:focus,
+      .form-group select:focus,
+      .form-group textarea:focus {
+        outline: none;
+        border-color: var(--sc-primary);
+        box-shadow: 0 0 0 3px rgba(91, 94, 246, 0.1);
+      }
+
+      .form-group.inline {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .form-group.inline input[type="checkbox"] {
+        margin-top: 3px;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--sc-primary);
+        cursor: pointer;
+      }
+
+      .form-group.inline input[type="checkbox"]:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .form-group.inline label {
+        margin: 0;
+        cursor: pointer;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .form-group small,
+      .muted {
+        display: block;
+        margin-top: 4px;
+        color: var(--sc-muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      textarea {
+        min-height: 80px;
+        field-sizing: content;
+        resize: vertical;
+      }
+
+      input[type="range"] {
+        -webkit-appearance: none;
+        width: 100%;
+        height: 24px;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 6px;
+        background: var(--sc-border);
+        border-radius: 999px;
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--sc-primary);
+        margin-top: -6px;
+        border: 2px solid var(--sc-card);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        transition: transform 0.1s ease;
+      }
+
+      input[type="range"]:active::-webkit-slider-thumb {
+        transform: scale(1.1);
+      }
+
+      button.primary {
+        width: 100%;
+        padding: 12px;
+        background: var(--sc-primary);
+        color: #ffffff;
+        border: none;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 12px rgba(91, 94, 246, 0.2);
+      }
+
+      button.primary:hover {
+        opacity: 0.9;
+        box-shadow: 0 6px 16px rgba(91, 94, 246, 0.3);
+      }
+
+      button.primary:active {
+        transform: translateY(1px);
+      }
+
+      button.primary:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      button.secondary {
+        width: 100%;
+        padding: 10px;
+        background: var(--sc-card);
+        color: var(--sc-text);
+        border: 1px solid var(--sc-border);
+        border-radius: 12px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      button.secondary:hover {
+        border-color: var(--sc-primary);
+        background: var(--sc-bg);
+      }
+
+      button.secondary:active {
+        transform: translateY(0.5px);
+      }
+
+      button.secondary:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .fallback-card {
+        padding: 14px;
+        border-radius: 12px;
+        border: 1px solid var(--sc-border);
+        background: var(--sc-bg);
+        margin-bottom: 16px;
+      }
+
+      .style-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .style-option {
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--sc-border);
+        background: var(--sc-card);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+      }
+
+      .style-option:hover {
+        border-color: var(--sc-primary);
+      }
+
+      .style-option:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .style-option.selected {
+        border-color: var(--sc-primary);
+        background: var(--sc-primary);
+        color: white;
+      }
+
+      .shortcut-hint {
+        margin-top: 20px;
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(91, 94, 246, 0.05);
+        font-size: 12px;
+        color: var(--sc-muted);
+        text-align: center;
+        border: 1px dashed var(--sc-border);
+      }
+
+      .shortcut-hint kbd {
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--sc-card);
+        border: 1px solid var(--sc-border);
+        font-family: monospace;
+        font-size: 11px;
+        color: var(--sc-text);
+        box-shadow: 0 1px 0 rgba(0,0,0,0.1);
+      }
+
+      .contact-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .contact-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px;
+        border-radius: 12px;
+        background: var(--sc-bg);
+        border: 1px solid var(--sc-border);
+        transition: all 0.2s ease;
+      }
+
+      .contact-item:hover {
+        border-color: var(--sc-primary);
+        background: var(--sc-card);
+      }
+
+      .contact-item:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .contact-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: var(--sc-primary);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+
+      .contact-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .contact-name {
+        font-weight: 700;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .contact-meta {
+        font-size: 12px;
+        color: var(--sc-muted);
+      }
+
+      .contact-item.expanded {
+        border-color: var(--sc-primary);
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        background: var(--sc-card);
+      }
+
+      .contact-details {
+        background: var(--sc-card);
+        border: 1px solid var(--sc-border);
+        border-top: none;
+        border-bottom-left-radius: 12px;
+        border-bottom-right-radius: 12px;
+        padding: 0 12px 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
+      }
+
+      .style-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .style-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: var(--sc-bg);
+        border: 1px solid var(--sc-border);
+        font-size: 11px;
+        color: var(--sc-text);
+      }
+
+      .style-pill strong {
+        color: var(--sc-primary);
+      }
+
+      .action-btn {
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--sc-border);
+        background: var(--sc-card);
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s ease;
+      }
+
+      .action-btn:hover {
+        border-color: var(--sc-primary);
+        background: var(--sc-bg);
+        transform: translateY(-1px);
+      }
+
+      .action-btn:focus-visible {
+        outline: 2px solid var(--sc-primary);
+        outline-offset: 2px;
+      }
+
+      .empty-state {
+        padding: 40px 20px;
+        text-align: center;
+        color: var(--sc-muted);
+        font-size: 13px;
+      }
+
+      .button-stack {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+    </style>
+
+  </head>
+  <body>
+  <div class="header">
+    <span class="logo">SC</span>
+    <h1>Social Copilot</h1>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="settings">设置</button>
+    <button class="tab" data-tab="contacts">联系人</button>
+    <button class="tab" data-tab="about">关于</button>
+  </div>
+
+  <!-- 设置页 -->
+  <div id="settings" class="tab-content active">
+    <div id="status" class="status warning">正在检查状态...</div>
+
+    <div class="fallback-card" style="margin-top: 12px;">
+      <div class="form-group" style="margin-bottom: 10px;">
+        <label style="font-weight: 600;">隐私告知（必选）</label>
+        <small class="muted">生成建议时会将必要的对话上下文发送到你选择的第三方模型服务</small>
+      </div>
+      <div class="form-group inline" style="margin-bottom: 0;">
+        <label for="privacyAcknowledged" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="privacyAcknowledged">
+          我已理解并同意上述说明
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group inline">
+      <label for="advancedMode" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="advancedMode">
+        高级模式（自定义 API）
+      </label>
+      <small>官方服务也需要 API Key，开启后可自行配置第三方 API</small>
+    </div>
+
+    <div id="advancedFields" class="fallback-card hidden">
+      <div class="form-group">
+        <label for="provider">模型提供商</label>
+        <select id="provider">
+          <option value="deepseek">DeepSeek (推荐)</option>
+          <option value="openai">OpenAI</option>
+          <option value="claude">Claude</option>
+          <option value="nvidia">NVIDIA</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="baseUrl">Base URL（可选）</label>
+        <input type="text" id="baseUrl" placeholder="例如：https://api.deepseek.com" autocomplete="off">
+        <small id="baseUrlHint" class="muted">留空则使用默认；仅支持官方域名；不要包含 <code>/v1</code></small>
+      </div>
+
+      <div class="form-group inline">
+        <label for="allowInsecureHttp" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="allowInsecureHttp">
+          允许 http Base URL
+        </label>
+        <small>仅用于本地代理或测试环境（可能降低安全性）</small>
+      </div>
+
+      <div class="form-group inline">
+        <label for="allowPrivateHosts" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="allowPrivateHosts">
+          允许本地/私有地址
+        </label>
+        <small>用于访问 localhost 或内网代理</small>
+      </div>
+
+      <div class="form-group">
+        <label for="model">模型名称（可选）</label>
+        <input type="text" id="model" placeholder="例如：deepseek-v3.2" list="modelSuggestions" autocomplete="off">
+        <datalist id="modelSuggestions"></datalist>
+        <small id="modelHint" class="muted">不填写则使用默认模型</small>
+      </div>
+    </div>
+
+    <div class="fallback-card" style="margin-top: 10px;">
+      <div class="form-group">
+        <label for="apiKey">API Key</label>
+        <input type="password" id="apiKey" placeholder="sk-...">
+        <small id="apiKeyHint">
+          <a href="https://platform.deepseek.com/" target="_blank" rel="noopener noreferrer">获取 DeepSeek API Key</a>
+        </small>
+        <button id="clearApiKeyBtn" class="secondary" type="button" style="margin-top: 8px;">清除 API Key</button>
+      </div>
+
+      <div class="form-group inline">
+        <label for="persistApiKey" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="persistApiKey">
+          记住 API Key
+        </label>
+        <small>不勾选则密钥仅本次浏览器会话有效（重启浏览器需重新输入）；若浏览器不支持 session，长时间未使用可能失效</small>
+      </div>
+    </div>
+
+    <div class="form-group inline">
+      <label for="enableMemory" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="enableMemory">
+        启用长期记忆
+      </label>
+      <small>后台会提炼并存储联系人摘要（默认关闭）</small>
+    </div>
+
+    <div class="form-group">
+      <label for="language">回复语言</label>
+      <select id="language">
+        <option value="auto">自动（推荐）</option>
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+      <small class="muted">选择 auto 时按当前对话自动决定中/英文输出</small>
+    </div>
+
+    <div class="form-group">
+      <label for="temperature">温度（0-100）<span id="temperatureValue" class="muted" style="margin-left: 6px;">80</span></label>
+      <input type="range" id="temperature" min="0" max="100" step="1" value="80">
+      <small class="muted">越高越发散，越低越稳定</small>
+    </div>
+
+    <div class="form-group inline">
+      <label for="autoInGroups" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="autoInGroups">
+        群聊自动弹出
+      </label>
+      <small>默认关闭；群聊中仍可按 Alt+S 手动触发</small>
+    </div>
+
+    <div class="form-group inline">
+      <label for="autoTrigger" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="autoTrigger" checked>
+        收到消息自动生成建议
+      </label>
+      <small>关闭后仅可按 Alt+S 手动触发</small>
+    </div>
+
+    <div id="autoAgentGroup" class="fallback-card hidden" style="margin-top: 12px;">
+      <div class="form-group" style="margin-bottom: 10px;">
+        <label style="font-weight: 600;">高级实验：自动代理</label>
+        <small class="muted">默认关闭。开启后仅在单聊自动生成时尝试填充并按 Enter 发送，可能因平台限制失败或误发。</small>
+      </div>
+      <div class="form-group inline" style="margin-bottom: 0;">
+      <label for="autoAgent" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="autoAgent">
+        我确认风险并启用自动发送实验
+      </label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="cacheStrategy">建议缓存策略</label>
+      <select id="cacheStrategy">
+        <option value="auto">仅自动触发使用缓存（推荐）</option>
+        <option value="always">始终使用缓存（减少成本）</option>
+        <option value="off">关闭缓存（每次都重新生成）</option>
+      </select>
+      <small class="muted">缓存可减少重复请求；手动触发会优先获取新的建议</small>
+    </div>
+
+    <div class="fallback-card" style="margin-top: 12px;">
+      <div class="form-group" style="margin-bottom: 10px;">
+        <label style="font-weight: 600;">提示词</label>
+        <small class="muted">用于增强稳定性与个性化；会追加到默认提示词后（不影响对话内容脱敏）</small>
+      </div>
+
+      <div class="form-group">
+        <label for="customSystemPrompt">自定义系统提示词（可选）</label>
+        <textarea id="customSystemPrompt" rows="4" placeholder="例如：避免过度热情；尽量简短；不要使用表情符号。可用变量：{{contact_name}} {{app}} {{is_group}}"></textarea>
+      </div>
+
+      <div class="form-group" style="margin-bottom: 0;">
+        <label for="customUserPrompt">自定义用户提示词（可选）</label>
+        <textarea id="customUserPrompt" rows="4" placeholder="例如：如果对方提出问题，先确认需求再给建议。可用变量：{{contact_name}} {{styles}}"></textarea>
+      </div>
+    </div>
+
+    <div class="fallback-card" style="margin-top: 12px;">
+      <div class="form-group" style="margin-bottom: 10px;">
+        <label style="font-weight: 600;">隐私与发送范围</label>
+        <small class="muted">用于控制发送给模型的上下文大小与脱敏策略（不影响本地存储）</small>
+      </div>
+
+      <div class="form-group inline" style="margin-bottom: 10px;">
+        <label for="redactPii" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="redactPii" checked>
+          发送前脱敏（邮箱/手机号/链接）
+        </label>
+      </div>
+
+      <div class="form-group inline" style="margin-bottom: 10px;">
+        <label for="anonymizeSenders" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="anonymizeSenders" checked>
+          不发送昵称（用「我/对方」替代）
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label for="contextMessageLimit">发送最近消息条数</label>
+        <input type="number" id="contextMessageLimit" min="1" max="50" placeholder="10">
+        <small class="muted">仅影响发送给模型的上下文（当前消息始终包含）</small>
+      </div>
+
+      <div class="form-group">
+        <label for="maxCharsPerMessage">单条消息最大字符数</label>
+        <input type="number" id="maxCharsPerMessage" min="50" max="4000" placeholder="500">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 0;">
+        <label for="maxTotalChars">上下文总字符预算</label>
+        <input type="number" id="maxTotalChars" min="200" max="20000" placeholder="4000">
+      </div>
+    </div>
+
+    <div class="form-group inline">
+      <label for="enableFallback" style="margin: 0; font-weight: 600;">
+        <input type="checkbox" id="enableFallback">
+        启用备用模型
+      </label>
+      <small>主模型异常时自动切换</small>
+    </div>
+
+    <div id="fallbackFields" class="fallback-card hidden">
+      <div class="form-group">
+        <label for="fallbackProvider">备用模型</label>
+        <select id="fallbackProvider">
+          <option value="deepseek">DeepSeek</option>
+          <option value="openai">OpenAI</option>
+          <option value="claude">Claude</option>
+          <option value="nvidia">NVIDIA</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="fallbackBaseUrl">备用 Base URL（可选）</label>
+        <input type="text" id="fallbackBaseUrl" placeholder="例如：https://api.deepseek.com" autocomplete="off">
+        <small id="fallbackBaseUrlHint" class="muted">留空则使用默认；仅支持官方域名；不要包含 <code>/v1</code></small>
+      </div>
+
+      <div class="form-group inline">
+        <label for="fallbackAllowInsecureHttp" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="fallbackAllowInsecureHttp">
+          允许备用 http Base URL
+        </label>
+        <small>仅用于本地代理或测试环境</small>
+      </div>
+
+      <div class="form-group inline">
+        <label for="fallbackAllowPrivateHosts" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="fallbackAllowPrivateHosts">
+          允许备用本地/私有地址
+        </label>
+        <small>用于访问备用 localhost 或内网代理</small>
+      </div>
+
+      <div class="form-group">
+        <label for="fallbackModel">备用模型名称（可选）</label>
+        <input type="text" id="fallbackModel" placeholder="例如：deepseek-r1-0528" list="fallbackModelSuggestions" autocomplete="off">
+        <datalist id="fallbackModelSuggestions"></datalist>
+        <small id="fallbackModelHint" class="muted">不填写则使用该提供商默认模型</small>
+      </div>
+
+      <div class="form-group">
+      <label for="fallbackApiKey">备用 API Key</label>
+      <input type="password" id="fallbackApiKey" placeholder="sk-...">
+      <small id="fallbackApiKeyHint">
+          <a href="https://platform.deepseek.com/" target="_blank" rel="noopener noreferrer">获取 DeepSeek API Key</a>
+        </small>
+        <button id="clearFallbackApiKeyBtn" class="secondary" type="button" style="margin-top: 8px;">清除备用 API Key</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>默认回复风格</label>
+      <div class="style-options">
+        <span class="style-option selected" data-style="caring" tabindex="0">💗 关心</span>
+        <span class="style-option selected" data-style="humorous" tabindex="0">😄 幽默</span>
+        <span class="style-option selected" data-style="casual" tabindex="0">😊 随意</span>
+        <span class="style-option" data-style="rational" tabindex="0">🧠 理性</span>
+        <span class="style-option" data-style="formal" tabindex="0">📝 正式</span>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="suggestionCount">每次显示的回复数量</label>
+      <select id="suggestionCount">
+        <option value="3">3 条（默认）</option>
+        <option value="2">2 条</option>
+      </select>
+      <small class="muted">影响每次生成的回复建议条数</small>
+    </div>
+
+    <button id="testConnectionBtn" class="secondary">测试连接</button>
+    <button id="saveBtn" class="primary">保存设置</button>
+
+    <div class="shortcut-hint">
+      💡 快捷键：按 <kbd>Alt</kbd> + <kbd>S</kbd> 手动触发建议
+    </div>
+  </div>
+
+  <!-- 联系人页 -->
+  <div id="contacts" class="tab-content">
+    <div class="status info" style="margin-bottom: 10px;">
+      <strong>支持平台</strong><br>
+      Telegram Web、WhatsApp Web、Slack Web
+    </div>
+    <div class="muted" style="font-size: 12px; line-height: 1.4; margin: 0 0 12px;">
+      联系人记录来自以上平台的对话（仅本地存储，不展示原文对话）。
+    </div>
+    <div id="contactList" class="contact-list">
+      <div class="empty-state">暂无联系人记录</div>
+    </div>
+  </div>
+
+  <!-- 关于页 -->
+  <div id="about" class="tab-content">
+    <div class="status info">
+      <strong id="aboutVersion">Social Copilot</strong><br>
+      AI 辅助社交伴侣
+    </div>
+    <p style="font-size: 13px; color: var(--sc-muted); line-height: 1.6;">
+      为聊天应用提供智能回复建议，支持 Telegram Web、WhatsApp Web、Slack Web。
+    </p>
+    <p style="font-size: 13px; color: var(--sc-muted); line-height: 1.6; margin-top: 12px;">
+      所有数据默认存储在本地，保护您的隐私。
+    </p>
+    <p style="font-size: 13px; color: var(--sc-muted); line-height: 1.6; margin-top: 12px;">
+      提示：生成回复时会将“必要的对话上下文”发送到你选择的第三方模型服务；可在设置页的「隐私与发送范围」中配置脱敏/匿名化与发送上限。
+    </p>
+    <p style="font-size: 12px; color: var(--sc-muted-2); line-height: 1.6; margin-top: 8px;">
+      <a href="privacy.html" target="_blank" rel="noopener noreferrer">隐私政策</a>
+    </p>
+
+    <div class="fallback-card" style="margin-top: 12px;">
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label style="font-weight: 600;">备份与恢复</label>
+        <small class="muted">导出/导入联系人画像、风格偏好与长期记忆（不包含 API Key，也不包含原文对话消息）。</small>
+      </div>
+      <div class="button-stack">
+        <button id="exportUserDataBtn" class="secondary">导出数据备份</button>
+        <button id="importUserDataBtn" class="secondary">导入数据备份</button>
+      </div>
+      <input id="importUserDataFile" class="hidden" type="file" accept="application/json">
+      <small class="muted" style="display: block; margin-top: 8px;">注意：备份文件包含本地画像/记忆等隐私信息，请妥善保管。</small>
+    </div>
+
+    <button id="clearDataBtn" class="secondary">清除所有数据</button>
+
+    <div class="fallback-card" style="margin-top: 12px;">
+      <div class="form-group inline" style="margin-bottom: 12px;">
+        <label for="debugEnabled" style="margin: 0; font-weight: 600;">
+          <input type="checkbox" id="debugEnabled">
+          启用诊断日志
+        </label>
+        <small class="muted">记录最近请求，便于排查问题</small>
+      </div>
+
+      <div class="form-group" style="margin-top: 0;">
+        <label for="remoteSelectorsUrl">远程选择器配置 URL（可选）</label>
+        <input
+          type="text"
+          id="remoteSelectorsUrl"
+          placeholder="https://raw.githubusercontent.com/<owner>/<repo>/<branch>/selectors.json"
+          autocomplete="off"
+        >
+        <small class="muted">仅支持 raw.githubusercontent.com 的 https JSON；分支名不能包含 /；留空则禁用远程配置</small>
+      </div>
+
+      <div class="button-stack">
+        <button id="copyDiagnosticsBtn" class="secondary">复制诊断信息</button>
+        <button id="downloadDiagnosticsBtn" class="secondary">下载诊断 JSON</button>
+        <button id="clearDiagnosticsBtn" class="secondary">清空诊断日志</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
