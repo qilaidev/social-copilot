@@ -1,0 +1,93 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "social-copilot",
+  "alternateName": [
+    "Social Copilot",
+    "聊天导师",
+    "Local-First BYOK AI Chat Reply Assistant"
+  ],
+  "description": "Local-first, bring-your-own-key (BYOK) AI chat reply assistant browser extension (Manifest V3) and TypeScript SDK for Telegram Web, WhatsApp Web, and Slack Web. Generates 2-3 style-aware draft replies with outbound PII redaction, sender anonymization, multi-provider LLM failover, and strict human-in-the-loop confirmation.",
+  "version": "1.0.0",
+  "codeRepository": "https://github.com/qilaidev/social-copilot",
+  "issueTracker": "https://github.com/qilaidev/social-copilot/issues",
+  "url": "https://qilaidav.com/oash/",
+  "license": "https://spdx.org/licenses/MIT",
+  "programmingLanguage": [
+    "TypeScript",
+    "JavaScript",
+    "CSS",
+    "HTML"
+  ],
+  "runtimePlatform": [
+    "Chrome / Edge Manifest V3",
+    "Node.js >= 18"
+  ],
+  "operatingSystem": "Cross-platform (Chromium-based desktop browsers)",
+  "applicationCategory": "BrowserExtension",
+  "applicationSubCategory": "AI chat reply assistant",
+  "developmentStatus": "active",
+  "inLanguage": [
+    "zh-CN",
+    "en"
+  ],
+  "readme": "https://github.com/qilaidev/social-copilot/blob/main/README.md",
+  "releaseNotes": "https://github.com/qilaidev/social-copilot/blob/main/CHANGELOG.md",
+  "softwareHelp": "https://github.com/qilaidev/social-copilot/blob/main/docs/README.md",
+  "keywords": [
+    "ai-assistant",
+    "ai-reply-assistant",
+    "browser-extension",
+    "chrome-extension",
+    "edge-extension",
+    "manifest-v3",
+    "byok",
+    "local-first",
+    "privacy-first",
+    "pii-redaction",
+    "telegram-web",
+    "whatsapp-web",
+    "slack",
+    "llm",
+    "typescript",
+    "prompt-hooks",
+    "聊天导师",
+    "AI 聊天回复助手"
+  ],
+  "featureList": [
+    "Human-in-the-loop reply drafting (2-3 candidates across 5 reply styles and 4 thought-card directions) with zero default auto-sending",
+    "Platform DOM adapters for Telegram Web, WhatsApp Web, and Slack Web",
+    "Multi-provider BYOK LLM integration (DeepSeek, OpenAI, Claude, NVIDIA, SiliconFlow) with primary/fallback failover and request deduplication",
+    "Outbound PII redaction, sender anonymization, and configurable context message/character budgets",
+    "Browser-local IndexedDB and chrome.storage persistence with ephemeral session-first API key storage (persistApiKey=false by default)",
+    "Extensible Prompt Hook pipeline (registerPromptHook) in @social-copilot/core",
+    "Sanitized diagnostic ring buffer and JSON profile/preference backup and restore"
+  ],
+  "softwareRequirements": [
+    "Google Chrome or Microsoft Edge supporting Manifest V3",
+    "Node.js >= 18.0.0 and pnpm >= 10.0.0 to build from source",
+    "User-supplied API key for a supported LLM provider"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "name": "qilaidev",
+      "url": "https://github.com/qilaidev",
+      "sameAs": [
+        "https://qilaidav.com",
+        "https://github.com/qilaidev"
+      ]
+    }
+  ],
+  "maintainer": [
+    {
+      "@type": "Person",
+      "name": "qilaidev",
+      "url": "https://github.com/qilaidev",
+      "sameAs": [
+        "https://qilaidav.com",
+        "https://github.com/qilaidev"
+      ]
+    }
+  ]
+}
